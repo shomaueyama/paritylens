@@ -1,26 +1,80 @@
 @import "tailwindcss";
 
+/*
+  Design tokens. Components use the names (bg-surface, text-muted,
+  text-critical) and never raw colours, so light and dark mode are decided
+  here and nowhere else.
+*/
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+  --background: #f7f7f8;
+  --surface: #ffffff;
+  --line: #e4e4e7;
+  --foreground: #18181b;
+  --muted: #6b7280;
+  --accent: #2563eb;
+  --accent-foreground: #ffffff;
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --critical: #b91c1c;
+  --critical-soft: #fee2e2;
+  --high: #c2410c;
+  --high-soft: #ffedd5;
+  --medium: #a16207;
+  --medium-soft: #fef3c7;
+  --low: #0369a1;
+  --low-soft: #e0f2fe;
+  --ok: #15803d;
+  --ok-soft: #dcfce7;
+  --neutral-soft: #f1f1f3;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --background: #0f1012;
+    --surface: #17181b;
+    --line: #2a2b30;
+    --foreground: #ececee;
+    --muted: #9ca3af;
+    --accent: #60a5fa;
+    --accent-foreground: #0b1220;
+
+    --critical: #f87171;
+    --critical-soft: #3b1414;
+    --high: #fb923c;
+    --high-soft: #3a1e0c;
+    --medium: #facc15;
+    --medium-soft: #332a08;
+    --low: #38bdf8;
+    --low-soft: #0c2a3a;
+    --ok: #4ade80;
+    --ok-soft: #0f2e1b;
+    --neutral-soft: #222327;
   }
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-line: var(--line);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-critical: var(--critical);
+  --color-critical-soft: var(--critical-soft);
+  --color-high: var(--high);
+  --color-high-soft: var(--high-soft);
+  --color-medium: var(--medium);
+  --color-medium-soft: var(--medium-soft);
+  --color-low: var(--low);
+  --color-low-soft: var(--low-soft);
+  --color-ok: var(--ok);
+  --color-ok-soft: var(--ok-soft);
+  --color-neutral-soft: var(--neutral-soft);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
 }

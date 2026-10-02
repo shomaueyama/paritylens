@@ -7,6 +7,8 @@ export default defineConfig({
   resolve: { tsconfigPaths: true },
   test: {
     environment: "jsdom",
+    // Unit and component tests only. e2e/ belongs to Playwright.
+    include: ["src/**/*.test.{ts,tsx}"],
     setupFiles: ["./vitest.setup.ts"],
   },
 });
