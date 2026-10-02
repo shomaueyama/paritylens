@@ -3,7 +3,9 @@ name = "paritylens-engine"
 version = "0.1.0"
 description = "ParityLens comparison engine: normalization, deterministic diff, severity."
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "pydantic>=2.10",
+]
 
 [build-system]
 requires = ["hatchling"]

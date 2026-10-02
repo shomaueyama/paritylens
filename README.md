@@ -4,7 +4,7 @@ API migration compatibility testing.
 
 レガシー API を新しい API に置き換えるとき、「同じ入力に対して同じ挙動をするか」を検証するツール。旧 API と新 API に同じリクエストを送り、レスポンスの差異を検出して重大度を付ける。
 
-> **開発状況**: Phase 1(プロジェクトの土台)まで完了。比較エンジンはまだ実装していない。いま動くのは、検査対象になるデモ API 2つと、API・Web の骨格だけ。進み具合は [Roadmap](#roadmap) を参照。
+> **開発状況**: Phase 2(比較エンジン)まで完了。エンジンはライブラリとして動き、デモ API に仕込んだ10個の差異をすべて検出する。リクエストを実行する CLI、Web の画面、AI による説明はまだない。進み具合は [Roadmap](#roadmap) を参照。
 
 ## Problem
 
@@ -21,7 +21,7 @@ API を書き直すと、誰も決めていない仕様変更が紛れ込む。
 
 ParityLens は差異を3段階で絞り込む。
 
-1. **ノイズを落とす。** 同じリクエストを旧 API に2回送り、その2回の間で変わった値は「実行ごとに変わる値」とみなして除外する。設定は要らない
+1. **ノイズを落とす。** 同じリクエストを旧 API に2回送り、その2回の間で変わった値は「実行ごとに変わる値」とみなして除外する。リクエスト時刻そのものを返しているタイムスタンプも除外する。設定は要らない
 2. **決定的に分類する。** 残った差異を種類(ステータス変更、フィールド削除、型変更など)と重大度で分類する。ここまでは通常のアルゴリズムで、同じ入力からは必ず同じ結果が出る
 3. **AI が説明する。** 分類済みの差異を LLM に渡し、なぜ問題になりうるかを説明させる。AI の見解は参考情報で、合否には影響しない
 
@@ -151,6 +151,7 @@ infra/docker/      Dockerfile
 | [0002](docs/adr/0002-use-fastapi.md) | バックエンドに FastAPI を使う |
 | [0003](docs/adr/0003-use-postgresql.md) | PostgreSQL を使い、ジョブキューも当面 PostgreSQL で持つ |
 | [0004](docs/adr/0004-separate-deterministic-and-ai-diff.md) | 決定的 diff と AI 分析を分離する |
+| [0005](docs/adr/0005-noise-detection.md) | ノイズの検出に、2回実行とリクエスト時刻への追従を使う |
 
 ## Security
 
@@ -165,7 +166,7 @@ infra/docker/      Dockerfile
 | Phase | 内容 | 状態 |
 |---|---|---|
 | 1 | Project Setup: モノレポ、Docker Compose、CI、デモ API | 完了 |
-| 2 | Deterministic Diff: 正規化、差異の分類、ノイズ検出、重大度 | 未着手 |
+| 2 | Deterministic Diff: 正規化、差異の分類、ノイズ検出、重大度 | 完了 |
 | 3 | Execution + CLI: `paritylens run` | 未着手 |
 | 4 | Database + API: 認証、CRUD、hosted 実行 | 未着手 |
 | 5 | Dashboard | 未着手 |

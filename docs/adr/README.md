@@ -8,6 +8,7 @@
 | [0002](0002-use-fastapi.md) | バックエンドに FastAPI を使う | 採用 |
 | [0003](0003-use-postgresql.md) | PostgreSQL を使い、ジョブキューも当面 PostgreSQL で持つ | 採用 |
 | [0004](0004-separate-deterministic-and-ai-diff.md) | 決定的 diff と AI 分析を分離する | 採用 |
+| [0005](0005-noise-detection.md) | ノイズの検出に、2回実行とリクエスト時刻への追従を使う | 採用 |
 
 ## 書式
 
