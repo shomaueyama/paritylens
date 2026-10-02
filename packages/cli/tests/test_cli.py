@@ -9,9 +9,8 @@ from modern_shop_api.main import create_app as create_modern_app
 from paritylens_cli.main import ExitCode, FailOn, app, exit_code_for
 from paritylens_engine import Severity, Verdict
 from paritylens_engine.report import RunReport
+from paritylens_engine.testing import Serve
 from typer.testing import CliRunner
-
-from conftest import Serve
 
 DEMO_SUITE = Path(__file__).parents[3] / "demo" / "suite.yaml"
 runner = CliRunner()
