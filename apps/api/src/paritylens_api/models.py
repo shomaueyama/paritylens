@@ -25,6 +25,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -219,6 +220,9 @@ class Run(Base):
     __table_args__ = (
         # The worker's "next queued run" query.
         Index("ix_runs_status_created_at", "status", "created_at"),
+        # The worker's "next analysis" query. Partial: only the few runs
+        # waiting for analysis are in it, however many runs there are.
+        Index("ix_runs_ai_pending", "created_at", postgresql_where=text("ai_status = 'pending'")),
     )
 
     id: Mapped[uuid.UUID] = _id()
@@ -229,6 +233,10 @@ class Run(Base):
     # none | pending | running | completed | failed | skipped
     ai_status: Mapped[str] = mapped_column(String(10), default="none")
     ai_error: Mapped[str | None] = mapped_column(Text)
+    ai_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # How many times an analysis of this run was started. Each one is a
+    # paid call to a model, so the number is capped.
+    ai_attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     old_base_url: Mapped[str] = mapped_column(String(2000))
     new_base_url: Mapped[str] = mapped_column(String(2000))
     # What was run, frozen at the moment the run was requested, so the
@@ -322,11 +330,19 @@ class AiAnalysis(Base):
     """
 
     __tablename__ = "ai_analyses"
-    __table_args__ = (UniqueConstraint("run_id", "signature"),)
+    __table_args__ = (
+        # One opinion per finding. Over a hash of the signature, because a
+        # signature contains a path and a path can be longer than an index
+        # entry may be.
+        Index("uq_ai_analyses_finding", "run_id", text("md5(signature)"), "severity", unique=True),
+    )
 
     id: Mapped[uuid.UUID] = _id()
     run_id: Mapped[uuid.UUID] = _fk("runs.id")
+    # A finding is a signature at a severity, exactly as GET /findings
+    # groups them; together these say which finding the opinion is about.
     signature: Mapped[str] = mapped_column(Text)
+    severity: Mapped[str] = mapped_column(String(10))
     verdict: Mapped[str] = mapped_column(String(10))  # safe | warning | breaking
     confidence: Mapped[str] = mapped_column(String(10))  # low | medium | high
     explanation: Mapped[str] = mapped_column(Text)

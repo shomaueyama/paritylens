@@ -25,6 +25,9 @@
             "title": "Provider",
             "type": "string"
           },
+          "severity": {
+            "$ref": "#/components/schemas/Severity"
+          },
           "signature": {
             "title": "Signature",
             "type": "string"
@@ -41,6 +44,7 @@
         },
         "required": [
           "signature",
+          "severity",
           "verdict",
           "confidence",
           "explanation",

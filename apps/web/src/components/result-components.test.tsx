@@ -2,6 +2,7 @@ import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import type { Analysis, Difference, Finding } from "@/lib/api/types";
+import { findingKey } from "@/lib/result";
 
 import { SeverityBadge, VerdictBadge } from "./badges";
 import { AiOpinion, DifferencesTable, FindingsList } from "./differences-table";
@@ -50,6 +51,7 @@ const finding = (overrides: Partial<Finding> = {}): Finding => ({
 
 const analysis: Analysis = {
   signature: "type_changed:$.items[*].quantity",
+  severity: "high",
   verdict: "breaking",
   confidence: "high",
   explanation: "Clients that parse quantity as a string will fail.",
@@ -171,13 +173,30 @@ describe("FindingsList", () => {
       <FindingsList
         findings={[finding(), other]}
         runId="run-1"
-        analyses={{ [analysis.signature]: analysis }}
+        analyses={{ [findingKey(analysis)]: analysis }}
       />,
     );
 
     expect(screen.getAllByText(/AI opinion/)).toHaveLength(1);
     const item = screen.getByText("$.items[*].quantity").closest("li") as HTMLElement;
     expect(within(item).getByText(analysis.explanation)).toBeInTheDocument();
+  });
+
+  it("does not show an opinion on the same field at another severity", () => {
+    // Found in review. The model was shown the high-severity occurrence;
+    // the low one is a different finding it said nothing about.
+    const sameFieldLower = finding({ severity: "low" });
+
+    render(
+      <FindingsList
+        findings={[finding(), sameFieldLower]}
+        runId="run-1"
+        analyses={{ [findingKey(analysis)]: analysis }}
+      />,
+    );
+
+    expect(screen.getAllByText("$.items[*].quantity")).toHaveLength(2);
+    expect(screen.getAllByText(/AI opinion/)).toHaveLength(1);
   });
 });
 

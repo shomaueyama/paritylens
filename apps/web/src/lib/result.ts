@@ -128,3 +128,12 @@ export function formatDateTime(iso: string): string {
   }).format(new Date(iso));
   return `${text} UTC`;
 }
+
+/**
+ * What identifies a finding within a run: its signature at a severity.
+ * The same field can be noise in one case and a real change in another,
+ * and those are two findings. An AI opinion is about exactly one of them.
+ */
+export function findingKey(finding: { signature: string; severity: string }): string {
+  return `${finding.severity}|${finding.signature}`;
+}

@@ -54,8 +54,10 @@ class CaseResultSummary(ApiModel):
 class AnalysisOut(ApiModel):
     """A language model's opinion about one finding. Advisory: it changes no verdict."""
 
-    # Matches DifferenceOut.signature.
+    # Together these name the finding it is about: Finding.signature and
+    # Finding.severity.
     signature: str
+    severity: Severity
     verdict: Literal["safe", "warning", "breaking"]
     confidence: Literal["low", "medium", "high"]
     explanation: str

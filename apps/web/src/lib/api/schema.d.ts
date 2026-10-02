@@ -552,6 +552,7 @@ export interface components {
             model: string;
             /** Provider */
             provider: string;
+            severity: components["schemas"]["Severity"];
             /** Signature */
             signature: string;
             /**

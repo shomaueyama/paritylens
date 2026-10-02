@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 
 import { SeverityBadge } from "@/components/badges";
 import type { Analysis, Difference, Finding } from "@/lib/api/types";
-import { changeText, hintText, kindText, reasonText } from "@/lib/result";
+import { changeText, findingKey, hintText, kindText, reasonText } from "@/lib/result";
 
 function remarksOf(difference: Difference): string[] {
   const reason = reasonText(difference.reason);
@@ -87,17 +87,18 @@ export function FindingsList({
 }: {
   findings: Finding[];
   runId: string;
+  /** Keyed by findingKey(). */
   analyses?: Record<string, Analysis>;
 }) {
   return (
     <ul className="divide-y divide-line">
       {findings.map((finding) => {
         const remarks = remarksOf(finding.example);
-        const analysis = analyses[finding.signature];
+        const analysis = analyses[findingKey(finding)];
         const more = finding.case_count - finding.cases.length;
         return (
           <li
-            key={`${finding.severity}|${finding.signature}`}
+            key={findingKey(finding)}
             className="grid gap-x-4 gap-y-1 px-4 py-3 md:grid-cols-[6rem_1fr]"
           >
             <div>

@@ -592,15 +592,50 @@ async def test_the_worker_survives_the_database_being_unreachable(
         if len(attempts) == 3:
             raise asyncio.CancelledError  # stop the endless loop for the test
 
-    monkeypatch.setattr(loop, "work_once", unreachable)
-    monkeypatch.setattr(loop, "sweep", unreachable)
     monkeypatch.setattr("paritylens_api.worker.loop.asyncio.sleep", record_sleep)
 
     with pytest.raises(asyncio.CancelledError):
-        await loop.run_forever(sessions, settings)
+        await loop._poll("runs", unreachable, sessions, settings)
 
     # It kept trying, waiting longer each time.
     assert attempts == [2.0, 4.0, 8.0]
+
+
+async def test_a_slow_analysis_does_not_hold_up_runs(
+    sessions: Sessions, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Found in review: analyses ran inside the run loop, so one slow model
+    call left queued runs, and housekeeping, waiting behind it."""
+    runs_taken = 0
+    enough = asyncio.Event()
+
+    async def model_that_never_answers(*args: object, **kwargs: object) -> bool:
+        await asyncio.Event().wait()
+        return True
+
+    async def take_a_run(*args: object, **kwargs: object) -> bool:
+        nonlocal runs_taken
+        await asyncio.sleep(0)  # as the real one does when it reads the queue
+        runs_taken += 1
+        if runs_taken == 3:
+            enough.set()
+        return True
+
+    async def nothing(*args: object, **kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(loop, "analyze_once", model_that_never_answers)
+    monkeypatch.setattr(loop, "work_once", take_a_run)
+    monkeypatch.setattr(loop, "sweep", nothing)
+
+    worker = asyncio.create_task(loop.run_forever(sessions, settings))
+    try:
+        async with asyncio.timeout(5):
+            await enough.wait()
+    finally:
+        worker.cancel()
+
+    assert runs_taken >= 3
 
 
 # --- found in review: uploaded reports are input ------------------------------------
@@ -806,3 +841,64 @@ async def test_difference_values_are_also_given_as_exact_text(
 
     assert finding["example"]["old_text"] == "9007199254740993"
     assert finding["example"]["new_text"] == "1.0"
+
+
+# --- found in review: nothing failed when these were removed -------------------------
+
+
+async def run_with_cases(
+    alice: httpx2.AsyncClient, sessions: Sessions, settings: Settings, count: int
+) -> str:
+    """A run of `count` cases, each seeing a different new total. Returns the run ID."""
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        number = int(request.url.path.rsplit("/", 1)[1])
+        old = request.url.host == "old.test"
+        return httpx2.Response(200, json={"total": 100 if old else 200 + number})
+
+    project = await create_project(alice)
+    for number in range(count):
+        step = {"request": {"method": "GET", "path": f"/orders/{number}"}}
+        await create_test_case(alice, project["id"], name=f"case {number}", steps=[step])
+    run_id: str = (await alice.post(f"/projects/{project['id']}/runs")).json()["id"]
+    await work_once(sessions, settings, transport=httpx2.MockTransport(handler))
+    return run_id
+
+
+async def test_a_findings_example_is_its_first_occurrence_in_run_order(
+    alice: httpx2.AsyncClient, sessions: Sessions, settings: Settings
+) -> None:
+    run_id = await run_with_cases(alice, sessions, settings, 4)
+
+    [finding] = (await alice.get(f"/runs/{run_id}/findings")).json()["findings"]
+
+    assert finding["example"]["new_text"] == "200"  # case 0, not whichever row came back first
+    assert finding["count"] == 4
+
+
+async def test_a_finding_lists_its_first_cases_and_counts_them_all(
+    alice: httpx2.AsyncClient,
+    sessions: Sessions,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("paritylens_api.routers.runs.MAX_CASES_PER_FINDING", 2)
+    run_id = await run_with_cases(alice, sessions, settings, 4)
+
+    [finding] = (await alice.get(f"/runs/{run_id}/findings")).json()["findings"]
+
+    assert [case["name"] for case in finding["cases"]] == ["case 0", "case 1"]
+    assert finding["case_count"] == 4
+
+
+async def test_more_findings_than_can_be_listed_keeps_the_most_severe_and_says_so(
+    alice: httpx2.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("paritylens_api.routers.runs.MAX_FINDINGS", 2)
+    project = await create_project(alice)
+    run = (await alice.post(f"/projects/{project['id']}/runs/import", json=report())).json()
+
+    body = (await alice.get(f"/runs/{run['id']}/findings")).json()
+
+    assert body["truncated"] is True
+    assert [f["severity"] for f in body["findings"]] == ["high", "low"]

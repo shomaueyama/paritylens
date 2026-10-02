@@ -16,6 +16,11 @@ type Effort = Literal["low", "medium", "high", "xhigh", "max"]
 # the request, the API re-runs it on another model in the same call.
 _FALLBACK_BETA = "server-side-fallback-2026-07-01"
 _MAX_TOKENS = 16000
+# The SDK's defaults are ten minutes and two retries: half an hour before
+# a stuck call gives up. An analysis is not worth that long a wait.
+_TIMEOUT_SECONDS = 120.0
+_MAX_RETRIES = 1
+_NO_CREDENTIALS = "the model provider has no API key configured"
 
 
 class AnthropicProvider:
@@ -32,7 +37,12 @@ class AnthropicProvider:
         self._effort: Effort = effort
         # Zero-argument construction: the SDK finds credentials itself
         # (ANTHROPIC_API_KEY, or a profile from `ant auth login`).
-        self._client = client or anthropic.AsyncAnthropic()
+        try:
+            self._client = client or anthropic.AsyncAnthropic(
+                timeout=_TIMEOUT_SECONDS, max_retries=_MAX_RETRIES
+            )
+        except anthropic.AnthropicError as exc:
+            raise LLMError(_NO_CREDENTIALS) from exc
 
     async def complete_json(
         self, *, system: str, user: str, schema: dict[str, Any]
@@ -62,23 +72,42 @@ class AnthropicProvider:
             raise LLMError("the model provider is rate limiting requests") from exc
         except anthropic.APIStatusError as exc:
             raise LLMError(f"the model provider answered {exc.status_code}") from exc
+        except anthropic.APITimeoutError as exc:
+            raise LLMError("the model provider took too long to answer") from exc
         except anthropic.APIConnectionError as exc:
             raise LLMError("the model provider could not be reached") from exc
+        except anthropic.CredentialsError as exc:
+            raise LLMError(_NO_CREDENTIALS) from exc
+        except anthropic.AnthropicError as exc:
+            raise LLMError("the model provider's response could not be read") from exc
+        except TypeError as exc:
+            # What the SDK raises when it has no credentials to send.
+            raise LLMError(_NO_CREDENTIALS) from exc
+        return _answer(response)
 
+
+def _answer(response: Any) -> dict[str, Any]:
+    """The JSON object in a response, or LLMError saying why there is none."""
+    try:
+        stop_reason, content = response.stop_reason, response.content
         # A refusal is a successful HTTP response. It has to be checked
         # before the content is read: there may be none.
-        if response.stop_reason == "refusal":
+        if stop_reason == "refusal":
             raise LLMRefusedError("the model declined to analyse this run")
-        if response.stop_reason == "max_tokens":
+        if stop_reason == "max_tokens":
             raise LLMError("the model's answer was cut off")
+        text = next((block.text for block in content if block.type == "text"), None)
+    except (AttributeError, TypeError) as exc:
+        # A proxy or gateway answered 200 with something that is not a
+        # Messages response; the SDK hands it over as it came.
+        raise LLMError("the model provider's response could not be read") from exc
 
-        text = next((block.text for block in response.content if block.type == "text"), None)
-        if text is None:
-            raise LLMError("the model returned no answer")
-        try:
-            answer = json.loads(text)
-        except ValueError as exc:
-            raise LLMError("the model's answer was not valid JSON") from exc
-        if not isinstance(answer, dict):
-            raise LLMError("the model's answer was not a JSON object")
-        return answer
+    if text is None:
+        raise LLMError("the model returned no answer")
+    try:
+        answer = json.loads(text)
+    except (ValueError, RecursionError) as exc:
+        raise LLMError("the model's answer was not valid JSON") from exc
+    if not isinstance(answer, dict):
+        raise LLMError("the model's answer was not a JSON object")
+    return answer

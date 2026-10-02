@@ -212,6 +212,9 @@ async def read_run(run_id: uuid.UUID, principal: PrincipalDep, session: SessionD
     )
 
 
+MAX_ANALYSES_PER_RUN = 5
+
+
 @router.post("/runs/{run_id}/analysis", status_code=202)
 async def request_analysis(
     run_id: uuid.UUID, principal: PrincipalDep, session: SessionDep, settings: SettingsDep
@@ -227,6 +230,11 @@ async def request_analysis(
         raise InvalidRequestError("this deployment has no AI provider configured")
     if run.ai_status in ("pending", "running"):
         raise ConflictError("an analysis of this run is already under way")
+    # Every analysis is a paid call to a model.
+    if run.ai_attempts >= MAX_ANALYSES_PER_RUN:
+        raise TooManyRequestsError(
+            f"this run has been analysed {run.ai_attempts} times; start a new run instead"
+        )
     run.ai_status = "pending"
     run.ai_error = None
     await session.flush()

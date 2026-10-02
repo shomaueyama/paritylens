@@ -10,7 +10,7 @@ import { Card, CardHeader, EmptyState } from "@/components/ui/card";
 import { load, serverApi } from "@/lib/api/server";
 import type { Analysis } from "@/lib/api/types";
 import { getProject } from "@/lib/project";
-import { formatDateTime, reasonText, severityRank } from "@/lib/result";
+import { findingKey, formatDateTime, reasonText, severityRank } from "@/lib/result";
 
 export const metadata: Metadata = { title: "Run" };
 
@@ -29,7 +29,7 @@ export default async function RunPage({ params }: PageProps<"/runs/[runId]">) {
   const minor = findings.filter((f) => f.severity === "low");
   const safe = findings.filter((f) => f.severity === "none");
   const analyses: Record<string, Analysis> = Object.fromEntries(
-    run.analyses.map((analysis) => [analysis.signature, analysis]),
+    run.analyses.map((analysis) => [findingKey(analysis), analysis]),
   );
 
   const aiAvailable = project.ai_enabled && features.ai_provider !== "none";
@@ -115,7 +115,10 @@ export default async function RunPage({ params }: PageProps<"/runs/[runId]">) {
             ) : (
               <ul className="divide-y divide-line">
                 {safe.map((finding) => (
-                  <li key={finding.signature} className="flex flex-wrap gap-x-4 px-4 py-2 text-sm">
+                  <li
+                    key={findingKey(finding)}
+                    className="flex flex-wrap gap-x-4 px-4 py-2 text-sm"
+                  >
                     <code className="font-semibold">{finding.path}</code>
                     <span className="text-muted">{reasonText(finding.example.reason)}</span>
                     <span className="ml-auto text-xs text-muted">
