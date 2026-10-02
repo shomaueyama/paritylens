@@ -1,7 +1,7 @@
 # ParityLens MVP System Design
 
 - 状態: Draft(実装前)
-- 最終更新: 2026-10-02(Phase 3 完了時点)
+- 最終更新: 2026-10-02(Phase 4 完了時点)
 - 対象: MVP(v0.1)。それ以降は「20. Future scalability」と Roadmap を参照
 
 ParityLens は、レガシー API を新 API に置き換えるときに「同じ入力に対して同じ挙動をするか」を検証するツールである。旧 API と新 API に同じリクエストを送り、差異を決定的なアルゴリズムで検出・分類し、そのうえで LLM が「その差異が意味的に重要か」を補助的に説明する。
@@ -239,7 +239,8 @@ apps/api/src/paritylens_api/
 
 - 単純な CRUD は router から repository を直接呼ぶ。service を挟むのはロジックがあるときだけ
 - repository は `workspace_id` なしでは呼べない形にする。テナント分離を書き忘れにくくするため
-- worker は api と同じイメージを別コマンドで起動する。`runs` テーブルをキューとして使い、`SELECT ... FOR UPDATE SKIP LOCKED` で1件ずつ取得する。SQS に移行するときは取得部分だけを差し替える
+- worker は api と同じイメージを別コマンドで起動する。`runs` テーブルをキューとして使い、`SELECT ... FOR UPDATE SKIP LOCKED` で1件ずつ取得する。SQS に移行するときは取得部分だけを差し替える。実行中は DB の接続を持たない
+- 15 分以上 running のままの run は、worker が落ちたものとして failed にする。保存期間(既定 30 日)を過ぎた run は結果ごと削除する
 - エラー応答は RFC 9457(Problem Details)に統一する
 
 ### engine の構成
@@ -301,16 +302,16 @@ erDiagram
 | `workspace_members` | workspace_id, user_id, role | MVP では role は owner だけ |
 | `sessions` | user_id, token_hash, expires_at | トークン本体は保存しない |
 | `api_tokens` | workspace_id, user_id, name, token_hash, last_used_at, revoked_at | CLI 用 |
-| `projects` | workspace_id, name, old_base_url, new_base_url, openapi_spec(JSONB), ai_enabled | |
+| `projects` | workspace_id, name, old_base_url, new_base_url, old_headers, new_headers(JSONB), openapi_spec(JSONB), critical_field_names, ai_enabled | ヘッダーの値は `{{secret.NAME}}` でシークレットを参照できる |
 | `endpoints` | project_id, method, path_template, summary, source | unique(project_id, method, path_template) |
-| `rules` | project_id, endpoint_id(null 可), kind, path, options(JSONB) | kind: ignore / unordered / critical |
+| `rules` | project_id, kind, path, options(JSONB) | kind: ignore / unordered / critical / compare_header。Endpoint 単位のルールは MVP では持たない |
 | `secrets` | project_id, name, ciphertext, nonce, key_version | 値は書き込み専用 |
 | `test_cases` | project_id, endpoint_id(null 可), name, steps(JSONB), noise_detection, enabled | steps は Pydantic で検証 |
-| `runs` | project_id, source(hosted/cli), status, ai_status, old_base_url, new_base_url, rules_snapshot(JSONB), summary(JSONB), engine_version, started_at, finished_at | 実行時点の設定を保存 |
+| `runs` | project_id, source(hosted/cli), status, ai_status, old_base_url, new_base_url, rules_snapshot(JSONB), suite_snapshot(JSONB), summary(JSONB), engine_version, error, started_at, finished_at | 実行時点の設定を保存。suite_snapshot にシークレットの値は入れず、参照名のまま持つ |
 | `case_results` | run_id, test_case_id(null 可), case_name, verdict, max_severity, error | テストケースを消しても結果は残す |
-| `step_results` | case_result_id, step_index, request(JSONB), old_response(JSONB), new_response(JSONB), volatile_paths(JSONB) | レスポンスは上限サイズで切り詰める |
-| `differences` | step_result_id, run_id, kind, path, old_value(JSONB), new_value(JSONB), severity, noise_source, signature | signature は同種の差異をまとめるためのハッシュ |
-| `ai_analyses` | difference_id(unique), verdict, confidence, explanation, provider, model, prompt_version | |
+| `step_results` | case_result_id, position, step_id, outcome, old(JSONB), new(JSONB), notes(JSONB) | old / new はリクエストとレスポンスの記録。ボディは上限サイズで切り詰める |
+| `differences` | step_result_id, run_id, position, kind, path, old_value(JSONB), new_value(JSONB), detail, severity, reason, noise_source, hints(JSONB) | |
+| `ai_analyses` | difference_id(unique), verdict, confidence, explanation, provider, model, prompt_version | Phase 6 で追加 |
 
 判断したこと:
 
@@ -326,6 +327,8 @@ REST、プレフィックスは `/api/v1`。認証はブラウザがセッショ
 
 | メソッド | パス | 内容 |
 |---|---|---|
+| GET | `/auth/config` | ログイン方法(dev / google) |
+| POST | `/auth/dev-login` | 開発ログイン。dev モードのときだけ存在する |
 | GET | `/auth/google/login`, `/auth/google/callback` | OAuth |
 | POST | `/auth/logout` | |
 | GET | `/me` | ユーザーと workspace |
@@ -335,13 +338,13 @@ REST、プレフィックスは `/api/v1`。認証はブラウザがセッショ
 | GET, PATCH, DELETE | `/projects/{id}` | |
 | POST | `/projects/{id}/openapi` | OpenAPI を保存し Endpoint を取り込む |
 | GET, POST | `/projects/{id}/endpoints` | |
-| PATCH, DELETE | `/endpoints/{id}` | |
+| DELETE | `/endpoints/{id}` | |
 | GET, POST | `/projects/{id}/rules` | |
 | DELETE | `/rules/{id}` | |
 | GET | `/projects/{id}/secrets` | 名前と更新日時だけ返す |
 | PUT, DELETE | `/projects/{id}/secrets/{name}` | |
 | GET, POST | `/projects/{id}/test-cases` | |
-| GET, PATCH, DELETE | `/test-cases/{id}` | |
+| GET, PUT, DELETE | `/test-cases/{id}` | 全体を置き換える(ステップをまたぐ検証があるため) |
 | POST | `/projects/{id}/runs` | hosted 実行を依頼。202 を返す |
 | POST | `/projects/{id}/runs/import` | CLI が RunReport を送る |
 | GET | `/projects/{id}/runs` | |
@@ -350,7 +353,7 @@ REST、プレフィックスは `/api/v1`。認証はブラウザがセッショ
 | GET | `/case-results/{id}` | ステップ、新旧レスポンス、差異、AI の見解 |
 | POST | `/runs/{id}/analysis` | AI 分析のやり直し |
 
-- 一覧はカーソル方式のページング
+- 実行一覧はカーソル方式のページング。件数の少ない一覧(プロジェクト、ルールなど)は全件を返す
 - 他 workspace のリソースは 403 ではなく 404。存在を知らせない
 - `RunReport` には `schema_version` を持たせ、古い CLI からの送信を判別する
 
@@ -575,10 +578,12 @@ class LLMProvider(Protocol):
 
 **認証は FastAPI が持つ。**
 
-- Google OAuth(OIDC)を Authlib で実装する。コールバックでユーザーを作成または取得し、セッションを発行する
+- Google OAuth(OIDC、認可コードフロー + PKCE)。コールバックで ID トークンを検証し、ユーザーを作成または取得して、セッションを発行する。手順は自前で実装し、署名検証だけ PyJWT に任せる(ADR 0007)
 - セッションはランダムなトークン。ブラウザには `HttpOnly; Secure; SameSite=Lax` の Cookie で渡し、DB にはハッシュだけを保存する
-- CLI は API トークン(`plk_` で始まるランダム文字列)。DB にはハッシュだけを保存し、平文は作成時に1回だけ表示する
+- CLI は API トークン(`plk_` で始まるランダム文字列)。DB にはハッシュだけを保存し、平文は作成時に1回だけ表示する。トークンの発行・失効はブラウザのセッションでしか行えない(漏れたトークンが自分の代わりを発行できないように)
 - CSRF 対策: `SameSite=Lax` に加えて、更新系リクエストでは `Origin` ヘッダーを検証する
+- リクエストボディのサイズ上限は、認証やパースより前に ASGI ミドルウェアで適用する(既定 256 KiB、レポートの取り込みは 32 MiB)
+- DB のコミットはレスポンスを返す前に行う。コミットに失敗したら、クライアントには成功ではなくエラーが返る
 - ローカル用に開発ログインを用意する(`AUTH_MODE=dev`)。Google の設定なしで `docker compose up` だけで試せるようにするため。本番環境の設定でこのモードが有効ならアプリは起動を拒否する
 
 Auth.js(NextAuth)を使わない理由: セッションを Next.js が持つと、FastAPI 側でそれを検証する仕組みが別に必要になる。CLI のトークン認証も API 側に要るので、認証を1か所にまとめた。
@@ -630,7 +635,7 @@ DNS rebinding 対策は、httpx2 の下層(httpcore2)の接続処理を差し替
 
 ### 秘密情報
 
-- 対象 API の認証情報は `secrets` に AES-256-GCM で暗号化して保存する。マスターキーは環境変数(本番は Secrets Manager)から読み、`key_version` でローテーションに備える
+- 対象 API の認証情報は `secrets` に AES-256-GCM で暗号化して保存する。マスターキーは環境変数(本番は Secrets Manager)から読む。暗号文には行の所属(プロジェクトと名前)を結び付けてあり、別の行に移すと復号できない。`key_version` を値と一緒に保存しているが、鍵の切り替え(2つの鍵を持って再暗号化する処理)は未実装
 - API はシークレットの値を返さない。返すのは名前と更新日時だけ
 - テストケースからは `{{secret.NAME}}` で参照し、実行の直前に展開する
 - CLI では環境変数(`${VAR}`)から読む。値はサーバーに送らない
@@ -749,7 +754,7 @@ paritylens/
 | 0004 | 決定的 diff と AI 分析を分離する | 済 |
 | 0005 | ノイズの検出に、2回実行とリクエスト時刻への追従を使う | 済 |
 | 0006 | 外向き通信の制御(EgressPolicy) | 済 |
-| 0007 | 認証をバックエンドで持つ | Phase 4 |
+| 0007 | 認証をバックエンドで持つ | 済 |
 | 0008 | フロントエンドの型を OpenAPI から生成する | Phase 5 |
 | 0009 | LLM プロバイダーを抽象化する | Phase 6 |
 | 0010 | AWS 構成と費用の判断 | Phase 7 |

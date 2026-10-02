@@ -109,3 +109,40 @@ Phase 3 で初めて I/O が出てくる。非同期処理と HTTP クライア�
 `http://evil.example/` が安全かどうかは、URL を見てもわからない。`evil.example` がどの IP に解決されるかで決まり、それは攻撃者が決められる。だから検査の対象は URL ではなく、実際に接続する IP アドレスである。
 
 さらに、検査のときと接続のときで名前解決を別々に行うと、その間に答えを変えられる(DNS rebinding)。`GuardedBackend.connect_tcp` が名前解決・検査・接続を1つの関数の中で行っているのは、このためである。`tests/test_transport.py` の `test_dns_rebinding_gets_no_second_lookup_to_exploit` が、名前解決が1回しか行われないことを確かめている。
+
+## Phase 4 で出てきた具体例
+
+Phase 4 は ASP.NET の経験がいちばん活きる。Controller、DI、EF Core、認証ミドルウェアに当たるものが揃う。
+
+| 見るファイル | ASP.NET Core でいうと | 見どころ |
+|---|---|---|
+| `routers/projects.py` | Controller | 関数の引数がそのままバインディング。パス、クエリ、ボディ、DI の区別は型で決まる(`uuid.UUID` はパス、Pydantic モデルはボディ、`Depends` は DI) |
+| `deps.py` | `[Authorize]` + `ClaimsPrincipal` + DI | `PrincipalDep` を引数に書いたハンドラは認証が必須になる。属性ではなく引数なので、認証済みのユーザーを使うコードは、認証を通らずには書けない |
+| `schemas/` | DTO と FluentValidation | 入力用(`ProjectCreate`)と出力用(`ProjectOut`)を分ける。`extra="forbid"` で未知のフィールドを拒否する |
+| `models.py` | EF Core のエンティティ | `Mapped[str]` がプロパティ、`mapped_column(...)` が Fluent API に当たる |
+| `db.py` の `get_session` | `DbContext` を Scoped で登録 | リクエストごとに1セッション、成功したら commit、例外なら rollback。`SaveChangesAsync` を1か所にまとめた形 |
+| `migrations/` | EF Migrations | `alembic revision --autogenerate` が `dotnet ef migrations add` に当たる。生成結果は必ず読む |
+| `repositories/owned.py` | グローバルクエリフィルター | EF Core なら `HasQueryFilter` でテナントを絞るところ。ここでは「workspace_id を取らない取得関数を作らない」ことで同じ効果を出している |
+| `core/errors.py` | `ProblemDetails` と例外フィルター | 例外クラスにステータスを持たせ、ハンドラで RFC 9457 の形に変換する |
+| `worker/loop.py` | `BackgroundService` | 別プロセスで動く。API と同じコードを import して使う |
+| `tests/conftest.py` | `WebApplicationFactory` + テスト用 DB | アプリをプロセス内で呼び、DB は本物の PostgreSQL。テストごとにトランザクションをロールバックする |
+
+### EF Core と違って戸惑うところ
+
+- **遅延読み込みがない。** async のセッションでは、読み込んでいない関連(`case.steps`)に触るとエラーになる。EF Core の `Include` に当たる `selectinload` を明示的に書く(`routers/runs.py` の `read_case_result`)
+- **`flush` と `commit` は別。** `flush` は SQL を発行するがトランザクションは閉じない。採番された ID や DB 側の既定値が欲しいときに呼ぶ。EF Core の `SaveChanges` は両方を兼ねている
+- **関連を定義しないと、INSERT の順序は保証されない。** `relationship()` で結んでいない2つのテーブルは、同じ `flush` の中でどちらが先に入るか決まらない。外部キーがあるなら、親を先に `flush` する
+
+### `Depends` の読み方
+
+```python
+async def read_project(project_id: uuid.UUID, principal: PrincipalDep, session: SessionDep) -> ProjectOut:
+```
+
+`PrincipalDep` は `Annotated[Principal, Depends(get_principal)]` の別名。FastAPI はリクエストごとに `get_principal` を呼び、その引数(`session`、`settings`)もまた `Depends` で解決する。コンストラクタインジェクションの連鎖と同じだが、登録するコンテナがなく、関数の引数をたどるだけで依存関係がわかる。
+
+テストでは `app.dependency_overrides[get_session] = ...` で差し替える。`ConfigureTestServices` に当たる。
+
+### SELECT ... FOR UPDATE SKIP LOCKED
+
+worker がキューから1件取るときの SQL。`FOR UPDATE` は取得した行をロックし、`SKIP LOCKED` は他のトランザクションがロックしている行を飛ばす。複数の worker が同時に同じテーブルを見ても、同じ行を2回取ることがない。`tests/test_worker_concurrency.py` が、6つの worker に3件を取り合わせて確かめている。

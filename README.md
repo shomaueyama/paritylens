@@ -4,7 +4,7 @@ API migration compatibility testing.
 
 レガシー API を新しい API に置き換えるとき、「同じ入力に対して同じ挙動をするか」を検証するツール。旧 API と新 API に同じリクエストを送り、レスポンスの差異を検出して重大度を付ける。
 
-> **開発状況**: Phase 3(CLI)まで完了。`paritylens run` で新旧の API を比較でき、デモ API に仕込んだ10個の差異をすべて検出する。Web の画面、結果の保存、AI による説明はまだない。進み具合は [Roadmap](#roadmap) を参照。
+> **開発状況**: Phase 4(API とデータベース)まで完了。CLI での比較に加えて、プロジェクトやテストケースを API で登録し、サーバー側で実行して結果を保存できる。Web の画面と AI による説明はまだない。進み具合は [Roadmap](#roadmap) を参照。
 
 ## Problem
 
@@ -59,10 +59,11 @@ flowchart LR
 | 領域 | 技術 |
 |---|---|
 | Frontend | Next.js (App Router), React, TypeScript, Tailwind CSS |
-| Backend | Python, FastAPI, Pydantic |
+| Backend | Python, FastAPI, Pydantic, SQLAlchemy (async), Alembic |
 | Database | PostgreSQL |
 | テスト | pytest, Vitest, React Testing Library |
 | 品質 | ruff, mypy (strict), ESLint, gitleaks |
+| HTTP | httpx2(接続処理を差し替えて SSRF 対策を実装) |
 | 実行環境 | Docker Compose, GitHub Actions |
 
 ## Demo
@@ -162,18 +163,32 @@ docker compose up --build
 |---|---|
 | http://localhost:3000 | Web |
 | http://localhost:8000/docs | API(OpenAPI の画面) |
+| (ポートなし) | worker(キューに入った実行を処理する) |
 | http://localhost:8001/docs | Legacy Shop API |
 | http://localhost:8002/docs | Modern Shop API |
 
 設定を変えたい場合は `.env.example` を `.env` にコピーして編集する。コピーしなくても既定値で起動する。
 
+### 結果をサーバーに保存する
+
+CLI の結果は `--upload-to` でサーバーに送れる。社内ネットワークで実行し、結果だけを共有する使い方を想定している。
+
+```bash
+export PARITYLENS_API_TOKEN=plk_...     # POST /api/v1/api-tokens で発行
+uv run paritylens run demo/suite.yaml --upload-to <project-id>
+```
+
+サーバー側で実行することもできる。API でプロジェクトとテストケースを登録し、`POST /api/v1/projects/{id}/runs` を呼ぶと、worker が実行して結果を保存する。どちらの経路でも、保存される形式は同じ(`RunReport`)である。
+
 ### コンテナを使わずに開発する
 
-必要なもの: [uv](https://docs.astral.sh/uv/)、Node.js 20.9 以上。Python 本体は uv が用意する。
+必要なもの: [uv](https://docs.astral.sh/uv/)、Node.js 20.9 以上、PostgreSQL(`docker compose up -d postgres` で起動できる)。Python 本体は uv が用意する。
 
 ```bash
 uv sync                                               # Python の依存を入れる
+uv run python -m paritylens_api.migrate               # マイグレーションを適用
 uv run uvicorn paritylens_api.main:app --reload       # API  → :8000
+uv run python -m paritylens_api.worker                # worker
 uv run uvicorn legacy_shop_api.main:app --port 8001   # 旧デモ API
 uv run uvicorn modern_shop_api.main:app --port 8002   # 新デモ API
 uv run paritylens run demo/suite.yaml                 # デモ API を比較する
@@ -184,7 +199,7 @@ cd apps/web && npm install && npm run dev             # Web  → :3000
 ## Testing
 
 ```bash
-uv run pytest               # Python のテスト
+uv run pytest               # Python のテスト(API のテストは PostgreSQL が必要)
 uv run ruff check .         # lint
 uv run ruff format --check . # フォーマットの確認
 uv run mypy                 # 型検査(strict)
@@ -226,6 +241,7 @@ infra/docker/      Dockerfile
 | [0004](docs/adr/0004-separate-deterministic-and-ai-diff.md) | 決定的 diff と AI 分析を分離する |
 | [0005](docs/adr/0005-noise-detection.md) | ノイズの検出に、2回実行とリクエスト時刻への追従を使う |
 | [0006](docs/adr/0006-egress-policy.md) | 外向き通信を EgressPolicy で制御する |
+| [0007](docs/adr/0007-backend-owned-auth.md) | 認証をバックエンドで持つ |
 
 ## Security
 
@@ -237,7 +253,11 @@ infra/docker/      Dockerfile
 
 **公開リポジトリ。** デモ API は架空のもので、実在のシステムの仕様・コード・データは含まない。`.env` はコミットせず、pre-commit と CI で gitleaks を実行する。
 
-認証とテナント分離は [設計書の 12 章](docs/architecture/mvp-system-design.md#12-authentication) にまとめてある。実装は Phase 4 で行う。
+**認証とテナント分離。** セッションと API トークンは、DB にハッシュだけを保存する。すべてのデータは workspace に属し、他の workspace の ID を指定すると、存在しない ID と同じ 404 が返る。この確認は、アプリの全ルートを OpenAPI から列挙して行うテストで保証している。詳しくは [ADR 0007](docs/adr/0007-backend-owned-auth.md)。
+
+**保存するシークレット。** 検査対象の API の認証情報は AES-256-GCM で暗号化して保存する。値を返す API はない。実行のときだけ worker が復号し、結果からは伏せる。
+
+**ログ。** ID、件数、所要時間、結果だけを記録する。リクエストやレスポンスのボディ、ヘッダーの値、クエリ文字列、メールアドレスは記録しない。例外は型だけを記録し、メッセージは記録しない。
 
 ## Roadmap
 
@@ -246,7 +266,7 @@ infra/docker/      Dockerfile
 | 1 | Project Setup: モノレポ、Docker Compose、CI、デモ API | 完了 |
 | 2 | Deterministic Diff: 正規化、差異の分類、ノイズ検出、重大度 | 完了 |
 | 3 | Execution + CLI: `paritylens run` | 完了 |
-| 4 | Database + API: 認証、CRUD、hosted 実行 | 未着手 |
+| 4 | Database + API: 認証、CRUD、hosted 実行 | 完了 |
 | 5 | Dashboard | 未着手 |
 | 6 | AI Semantic Analysis | 未着手 |
 | 7 | Deployment(AWS) | 未着手 |
