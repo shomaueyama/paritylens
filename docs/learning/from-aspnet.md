@@ -56,3 +56,30 @@ C# / ASP.NET Core の経験を前提に、このリポジトリで使う技術�
 - **`bool` は `int` のサブクラス。** `isinstance(True, int)` は `True` になる。Legacy API の数量チェックで `bool` を明示的に除外しているのはこのため
 - **型注釈は実行時に強制されない。** C# と違い、`def f(x: int)` に文字列を渡しても実行時エラーにならない。`mypy --strict` を CI で通すことで補う。Pydantic のモデルだけは実行時にも検証する
 - **`//` は切り捨て除算。** `303 * 10 // 100` は `30`。デモの消費税計算はこれを使っている。金額に `float` を使わないのは C# で `decimal` を使うのと同じ理由
+
+## Phase 2 で出てきた具体例
+
+Phase 2 は `packages/engine` だけで完結する。Web も DB も出てこない、普通の Python のコードである。
+
+| 見るファイル | C# でいうと | 見どころ |
+|---|---|---|
+| `model.py` | `record` と `enum` | Pydantic の `frozen=True` が不変の record に当たる。`StrEnum` は値が文字列の enum で、JSON にそのまま出せる。`field_validator` はコンストラクタでの検証 |
+| `jsonvalue.py` の `type Json = ...` | 判別共用体(C# にはまだない) | 「JSON の値とは、bool か int か … か、それらの list か dict」を型として書いている。`isinstance` で分岐すると、mypy がその枝の中の型を絞り込む |
+| `paths.py` の `match pattern:` | `switch` 式とパターンマッチ | `case _Key(name):` はクラスの中身を取り出しながら分岐する。C# の `case Key(var name):` と同じ |
+| `diff.py` | 再帰で木をたどる普通のコード | 入力を受け取り、差異のリストを返すだけ。I/O がないので、テストは値を渡して結果を見るだけで済む |
+| `severity.py` の `Evidence` | 引数をまとめる小さな `record` | `@dataclass(frozen=True)` は Pydantic より軽い。外部に出さない内部用の値にはこちらを使う |
+| `tests/test_diff.py` の `@pytest.mark.parametrize` | xUnit の `[Theory]` + `[InlineData]` | 1つのテスト関数に入力の表を渡す |
+| `tests/test_properties.py` | FsCheck | Hypothesis が JSON を自動生成し、「自分自身との差分は空」のような性質が常に成り立つかを調べる。失敗すると、最小の反例まで縮めて見せてくれる |
+
+### Pydantic と dataclass の使い分け
+
+- **Pydantic(`BaseModel`)**: プロセスの外に出る値。JSON にする、ファイルに書く、API で返す。実行時に検証する
+- **dataclass**: プロセスの中だけで使う値。検証は要らず、型検査(mypy)で足りる
+
+`Difference` は CLI がファイルに書き、API が読んで DB に保存するので Pydantic。`RawDifference` は engine の中でしか使わないので dataclass。
+
+### 純粋関数にしておく理由
+
+`compare_step(old, new, rules, baseline)` は、引数だけから結果が決まる。時計も乱数もネットワークも触らない。受信時刻が必要な判定(リクエスト時刻への追従)も、時刻を引数として受け取る形にしてある。
+
+C# でいえば、`DateTime.Now` を直接呼ばずに `TimeProvider` を注入するのと同じ発想だが、ここではさらに進めて、値そのものを渡している。おかげで engine のテストにはモックが1つもない。
