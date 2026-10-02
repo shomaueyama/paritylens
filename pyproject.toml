@@ -10,7 +10,7 @@ dependencies = []
 package = false
 
 [tool.uv.workspace]
-members = ["apps/api", "packages/*"]
+members = ["apps/api", "packages/*", "demo/*-shop-api"]
 
 [dependency-groups]
 dev = [
@@ -19,11 +19,15 @@ dev = [
     "pytest>=8.3",
     "ruff>=0.9",
     # Workspace members, installed editable so tests and mypy can import them.
+    "legacy-shop-api",
+    "modern-shop-api",
     "paritylens-api",
     "paritylens-engine",
 ]
 
 [tool.uv.sources]
+legacy-shop-api = { workspace = true }
+modern-shop-api = { workspace = true }
 paritylens-api = { workspace = true }
 paritylens-engine = { workspace = true }
 
@@ -55,10 +59,13 @@ files = [
     "apps/api/tests",
     "packages/engine/src",
     "packages/engine/tests",
+    "demo/legacy-shop-api/src",
+    "demo/modern-shop-api/src",
+    "demo/tests",
 ]
 
 [tool.pytest.ini_options]
 # importlib mode lets each package keep its own tests/ directory without
 # the test modules colliding on import.
 addopts = "--import-mode=importlib --strict-markers"
-testpaths = ["apps/api/tests", "packages/engine/tests"]
+testpaths = ["apps/api/tests", "packages/engine/tests", "demo/tests"]
