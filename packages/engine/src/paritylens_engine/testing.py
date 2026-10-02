@@ -1,6 +1,8 @@
 """Builders for tests, here and in the packages that use the engine."""
 
 import json
+from collections.abc import Callable
+from contextlib import AbstractContextManager
 from typing import Any
 
 from paritylens_engine.model import ResponseSnapshot
@@ -19,3 +21,8 @@ def text_response(
 ) -> ResponseSnapshot:
     headers = {"content-type": content_type} if content_type else {}
     return ResponseSnapshot(status=status, headers=headers, body=body)
+
+
+# The `serve` fixture in the repository's conftest.py: runs an ASGI app on
+# a real local port and yields its base URL.
+type Serve = Callable[[Any], AbstractContextManager[str]]
