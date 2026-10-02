@@ -1,7 +1,7 @@
 # ParityLens MVP System Design
 
 - 状態: Draft(実装前)
-- 最終更新: 2026-10-02
+- 最終更新: 2026-10-02(Phase 1 完了時点)
 - 対象: MVP(v0.1)。それ以降は「20. Future scalability」と Roadmap を参照
 
 ParityLens は、レガシー API を新 API に置き換えるときに「同じ入力に対して同じ挙動をするか」を検証するツールである。旧 API と新 API に同じリクエストを送り、差異を決定的なアルゴリズムで検出・分類し、そのうえで LLM が「その差異が意味的に重要か」を補助的に説明する。
@@ -205,7 +205,7 @@ Next.js(App Router)+ TypeScript + Tailwind CSS + shadcn/ui。
 - **型は FastAPI の OpenAPI から生成する**(`openapi-typescript` + `openapi-fetch`)。手書きの共有型パッケージは持たない
 - フォームは React Hook Form + Zod。Zod は入力時の検証用で、正は API 側の Pydantic
 - ブラウザからの API 呼び出しは Next.js の rewrites で `/api/*` を FastAPI に中継する。同一オリジンになるので CORS 設定が不要になり、セッション Cookie も素直に扱える
-- 認可は API が行う。Next.js 側の middleware は、未ログイン時に `/login` へ送るだけ
+- 認可は API が行う。Next.js 側の Proxy(Next.js 16 で Middleware から改名)は、未ログイン時に `/login` へ送るだけ
 
 ### 差異の表示
 
@@ -260,6 +260,8 @@ packages/engine/src/paritylens_engine/
 ```
 
 `executor.py` 以外は I/O を持たない純粋関数にする。テストで HTTP も DB も要らない。
+
+HTTP クライアントは Phase 3 の着手時に、httpx と後継の httpx2 を比べて決める。Phase 1 の時点で、Starlette のテストクライアントが httpx を非推奨にして httpx2 を求めるようになっている。
 
 ---
 
@@ -697,7 +699,8 @@ paritylens/
 ```
 
 - Python は uv の workspace で `apps/api`、`packages/*`、`demo/*` をまとめる
-- JavaScript は `apps/web` だけなので、JS 側の workspace は作らない
+- JavaScript は `apps/web` だけなので、JS 側の workspace は作らない。パッケージマネージャーは npm
+- `packages/cli` は Phase 3 で追加する
 - 依頼時の案にあった `packages/shared` は作らない。型は OpenAPI から生成する
 
 ### ツール

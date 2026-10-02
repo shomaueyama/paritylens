@@ -37,3 +37,22 @@ C# / ASP.NET Core の経験を前提に、このリポジトリで使う技術�
 | Embedding | 文章を数百〜数千次元のベクトルに変換したもの。意味が近い文章はベクトルも近くなる |
 | Vector Search | ベクトルの近さで検索すること。PostgreSQL では pgvector 拡張で行う |
 | RAG | 質問に関連する文書を検索し、それを LLM に渡して答えさせる構成。LLM が知らない仕様書の内容を扱える |
+
+## Phase 1 で出てきた具体例
+
+| 見るファイル | ASP.NET でいうと | 見どころ |
+|---|---|---|
+| `apps/api/src/paritylens_api/routers/health.py` | Controller のアクション1つ | `APIRouter` がコントローラー、`@router.get` が `[HttpGet]`。戻り値の型 `HealthResponse` がそのままレスポンスの DTO になり、OpenAPI にも出る |
+| `apps/api/src/paritylens_api/main.py` | `Program.cs` | `create_app()` でアプリを組み立てる。`include_router` が `MapControllers` に当たる |
+| `apps/api/tests/test_api_health.py` | `WebApplicationFactory` を使った統合テスト | `TestClient(create_app())` で、サーバーを起動せずに HTTP を投げられる |
+| `demo/legacy-shop-api/.../main.py` と `demo/modern-shop-api/.../main.py` | 手書きの検証 と `[ApiController]` + DataAnnotations | 同じ API を2通りに書いてある。Legacy は dict を手で検証して 400 を返す。Modern は Pydantic に任せるので、検証エラーは自動で 422 になる。この既定値の違いが、そのままデモの差異 10 になっている |
+| `apps/web/src/app/page.tsx` | Razor Page の `OnGetAsync` + View | `async` の Server Component。サーバーで API を `await` し、HTML だけをブラウザに送る |
+| `apps/web/next.config.ts` の `rewrites` | YARP などのリバースプロキシ | `/api/*` をバックエンドに中継する。ブラウザから見るとオリジンが1つになる |
+| `pyproject.toml`(ルート) | `.sln` + `Directory.Build.props` | uv の workspace が複数パッケージをまとめる。ruff や mypy の設定もここに1回だけ書く |
+| `infra/docker/python-service.Dockerfile` | `dotnet publish` を使うマルチステージビルド | 1段目で依存を入れ、2段目には仮想環境だけをコピーする。実行は非 root ユーザー |
+
+### Python で最初につまずきやすい点
+
+- **`bool` は `int` のサブクラス。** `isinstance(True, int)` は `True` になる。Legacy API の数量チェックで `bool` を明示的に除外しているのはこのため
+- **型注釈は実行時に強制されない。** C# と違い、`def f(x: int)` に文字列を渡しても実行時エラーにならない。`mypy --strict` を CI で通すことで補う。Pydantic のモデルだけは実行時にも検証する
+- **`//` は切り捨て除算。** `303 * 10 // 100` は `30`。デモの消費税計算はこれを使っている。金額に `float` を使わないのは C# で `decimal` を使うのと同じ理由
