@@ -21,7 +21,7 @@ from paritylens_api.deps import (
     check_origin,
 )
 from paritylens_api.models import User, Workspace
-from paritylens_api.schemas.auth import AuthConfig, DevLogin, Me
+from paritylens_api.schemas.auth import AuthConfig, DevLogin, Features, Me
 from paritylens_api.services import google
 from paritylens_api.services.auth import end_session, find_or_create_user, start_session
 
@@ -168,6 +168,11 @@ async def logout(
     if token:
         await end_session(session, token)
     response.delete_cookie(SESSION_COOKIE, path="/")
+
+
+@router.get("/features")
+async def features(_: PrincipalDep, settings: SettingsDep) -> Features:
+    return Features(ai_provider=settings.llm_provider)
 
 
 @router.get("/me")

@@ -9,10 +9,20 @@ import uuid
 from collections.abc import Sequence
 from typing import Any
 
+from paritylens_engine.paths import generalize_text
 from paritylens_engine.report import RunReport, SideResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from paritylens_api.models import CaseResult, Difference, Run, StepResult
+
+
+def signature_of(kind: str, path: str) -> str:
+    """What identifies a finding across cases: its kind and where it is.
+
+    $.items[0].quantity and $.items[sku=B-200].quantity are the same
+    finding seen in two places; both become type_changed:$.items[*].quantity.
+    """
+    return f"{kind}:{generalize_text(path) or path}"
 
 
 def _json(side: SideResult) -> dict[str, Any]:
@@ -75,6 +85,7 @@ def save_report(
                         if difference.noise_source
                         else None,
                         hints=[hint.value for hint in difference.hints],
+                        signature=signature_of(difference.kind.value, difference.path),
                     )
                 )
         session.add(case_row)

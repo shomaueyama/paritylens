@@ -708,3 +708,101 @@ async def test_the_difference_limit_is_applied_after_ordering_by_severity(
     [top] = (await alice.get(f"/runs/{run['id']}/differences?limit=1&min_severity=none")).json()
 
     assert top["severity"] == "high"
+
+
+# --- findings: the run's differences, grouped by the database ----------------------
+
+
+async def test_the_same_difference_in_many_cases_is_one_finding(
+    alice: httpx2.AsyncClient, sessions: Sessions, settings: Settings
+) -> None:
+    project = await create_project(alice)
+    for number in range(3):
+        await create_test_case(alice, project["id"], name=f"case {number}")
+    run_id = (await alice.post(f"/projects/{project['id']}/runs")).json()["id"]
+    await work_once(sessions, settings, transport=SHOP)
+
+    body = (await alice.get(f"/runs/{run_id}/findings")).json()
+
+    assert body["truncated"] is False
+    [finding] = body["findings"]
+    assert (finding["signature"], finding["severity"], finding["count"]) == (
+        "value_changed:$.total",
+        "critical",
+        3,
+    )
+    assert (finding["path"], finding["is_body_path"]) == ("$.total", True)
+    assert [case["name"] for case in finding["cases"]] == ["case 0", "case 1", "case 2"]
+    assert finding["case_count"] == 3
+    assert (finding["example"]["old_text"], finding["example"]["new_text"]) == ("332", "333")
+
+
+async def test_findings_include_noise_and_are_ordered_by_severity(
+    alice: httpx2.AsyncClient,
+) -> None:
+    project = await create_project(alice)
+    run = (await alice.post(f"/projects/{project['id']}/runs/import", json=report())).json()
+
+    findings = (await alice.get(f"/runs/{run['id']}/findings")).json()["findings"]
+
+    assert [(f["severity"], f["path"]) for f in findings] == [
+        ("high", "$.quantity"),
+        ("low", "$.currency"),
+        ("none", "$.id"),
+    ]
+    assert findings[2]["example"]["noise_source"] == "rule"
+
+
+async def test_a_run_with_very_many_differences_still_reports_every_finding(
+    alice: httpx2.AsyncClient,
+) -> None:
+    """Grouping happens in the database, so nothing is cut off by a row limit."""
+    big = report()
+    step = big["cases"][0]["steps"][0]
+    step["comparison"]["differences"] = [
+        {
+            "kind": "value_changed",
+            "path": f"$.rows[{n}].v",
+            "old": n,
+            "new": n + 1,
+            "severity": "medium",
+            "reason": "default_for_kind",
+        }
+        for n in range(999)
+    ] + [
+        {
+            "kind": "field_added",
+            "path": "$.extra",
+            "new": 1,
+            "severity": "low",
+            "reason": "default_for_kind",
+        }
+    ]
+    big["cases"][0]["verdict"] = "warning"
+    big["cases"][0]["max_severity"] = "medium"
+    project = await create_project(alice)
+    run = (await alice.post(f"/projects/{project['id']}/runs/import", json=big)).json()
+
+    findings = (await alice.get(f"/runs/{run['id']}/findings")).json()["findings"]
+
+    assert [(f["path"], f["count"]) for f in findings] == [("$.rows[*].v", 999), ("$.extra", 1)]
+
+
+async def test_difference_values_are_also_given_as_exact_text(
+    alice: httpx2.AsyncClient,
+) -> None:
+    """A browser would round the first and turn the second into 1."""
+    exact = report()
+    difference = exact["cases"][0]["steps"][0]["comparison"]["differences"][2]
+    difference["old"], difference["new"] = 9007199254740993, 1.0
+    project = await create_project(alice)
+    response = await alice.post(
+        f"/projects/{project['id']}/runs/import",
+        content=json.dumps(exact),
+        headers={"content-type": "application/json"},
+    )
+
+    [finding, *_] = (await alice.get(f"/runs/{response.json()['id']}/findings")).json()["findings"]
+
+    assert finding["example"]["old_text"] == "9007199254740993"
+    assert finding["example"]["new_text"] == "1.0"

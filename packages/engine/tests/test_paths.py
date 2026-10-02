@@ -4,6 +4,7 @@ from paritylens_engine.paths import (
     Path,
     PathSyntaxError,
     generalize,
+    generalize_text,
     last_field_name,
     parse_pattern,
     render,
@@ -154,3 +155,25 @@ def test_many_descendant_segments_do_not_take_exponential_time() -> None:
 
     assert not pattern.matches(path)
     assert not pattern.covers(path)
+
+
+@pytest.mark.parametrize(
+    ("location", "expected"),
+    [
+        ("$.items[0].id", "$.items[*].id"),
+        ("$.items[sku=A-100].quantity", "$.items[*].quantity"),
+        ("$.total", "$.total"),
+        ("$", "$"),
+        # A key that merely looks like an index is a key.
+        ("$['a[0]'].b", "$['a[0]'].b"),
+        ("$.rows['x=y'][3]", "$.rows['x=y'][*]"),
+        ("$.items['sku'='A]1'].price", "$.items[*].price"),
+    ],
+)
+def test_generalize_text_reads_a_rendered_path_back(location: str, expected: str) -> None:
+    assert generalize_text(location) == expected
+
+
+@pytest.mark.parametrize("location", ["status", "body", "header.etag", "$[oops", "$.items[*].id"])
+def test_generalize_text_is_none_for_anything_but_a_concrete_body_path(location: str) -> None:
+    assert generalize_text(location) is None

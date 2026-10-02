@@ -187,6 +187,7 @@ class TestCaseOut(ApiModel):
     __test__ = False
 
     id: uuid.UUID
+    project_id: uuid.UUID
     name: str
     endpoint_id: uuid.UUID | None
     steps: list[Any]

@@ -58,6 +58,9 @@ services:
     environment: &api-environment
       PARITYLENS_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-paritylens}:${POSTGRES_PASSWORD:-local-dev-only}@postgres:5432/${POSTGRES_DB:-paritylens}
       PARITYLENS_PUBLIC_BASE_URL: http://localhost:3000
+      # AI analysis: "none" (default), "fake" (canned answers, no account
+      # needed) or "anthropic" (needs ANTHROPIC_API_KEY).
+      PARITYLENS_LLM_PROVIDER: ${PARITYLENS_LLM_PROVIDER:-none}
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
@@ -78,7 +81,10 @@ services:
     build: *api-build
     command: ["python", "-m", "paritylens_api.worker"]
     restart: unless-stopped
-    environment: *api-environment
+    environment:
+      <<: *api-environment
+      # Only the worker talks to the model provider, so only it gets the key.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     depends_on:
       api:
         condition: service_healthy

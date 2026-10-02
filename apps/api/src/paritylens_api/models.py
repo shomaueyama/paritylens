@@ -226,7 +226,9 @@ class Run(Base):
     created_by: Mapped[uuid.UUID | None] = _fk("users.id", nullable=True, ondelete="SET NULL")
     source: Mapped[str] = mapped_column(String(10))  # hosted | cli
     status: Mapped[str] = mapped_column(String(10))  # queued | running | completed | failed
+    # none | pending | running | completed | failed | skipped
     ai_status: Mapped[str] = mapped_column(String(10), default="none")
+    ai_error: Mapped[str | None] = mapped_column(Text)
     old_base_url: Mapped[str] = mapped_column(String(2000))
     new_base_url: Mapped[str] = mapped_column(String(2000))
     # What was run, frozen at the moment the run was requested, so the
@@ -304,5 +306,33 @@ class Difference(Base):
     reason: Mapped[str] = mapped_column(String(30))
     noise_source: Mapped[str | None] = mapped_column(String(10))
     hints: Mapped[list[Any]] = mapped_column(default=list)
+    # "<kind>:<path with array positions generalised>". The same finding in
+    # different cases, or at different positions of an array, shares one.
+    signature: Mapped[str] = mapped_column(Text, default="")
 
     step: Mapped[StepResult] = relationship(back_populates="differences")
+
+
+class AiAnalysis(Base):
+    """What a language model said about one finding of a run.
+
+    Kept in its own table, apart from the differences it comments on. The
+    deterministic result is in `differences`; nothing here feeds back into
+    it. Deleting every row of this table changes no verdict and no score.
+    """
+
+    __tablename__ = "ai_analyses"
+    __table_args__ = (UniqueConstraint("run_id", "signature"),)
+
+    id: Mapped[uuid.UUID] = _id()
+    run_id: Mapped[uuid.UUID] = _fk("runs.id")
+    signature: Mapped[str] = mapped_column(Text)
+    verdict: Mapped[str] = mapped_column(String(10))  # safe | warning | breaking
+    confidence: Mapped[str] = mapped_column(String(10))  # low | medium | high
+    explanation: Mapped[str] = mapped_column(Text)
+    # Which model said it, and with which prompt, so an opinion can be
+    # traced and old ones told apart after either changes.
+    provider: Mapped[str] = mapped_column(String(30))
+    model: Mapped[str] = mapped_column(String(100))
+    prompt_version: Mapped[str] = mapped_column(String(20))
+    created_at: Mapped[datetime] = _created_at()

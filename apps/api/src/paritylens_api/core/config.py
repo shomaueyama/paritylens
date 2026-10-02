@@ -8,7 +8,7 @@ real deployment, and `Settings` refuses to load them in production.
 import base64
 from enum import StrEnum
 from functools import lru_cache
-from typing import Self
+from typing import Literal, Self
 from urllib.parse import urlsplit
 
 from paritylens_engine.egress import EgressMode
@@ -29,6 +29,13 @@ class AuthMode(StrEnum):
     # Sign in by typing any email address. For local development only.
     DEV = "dev"
     GOOGLE = "google"
+
+
+class LlmProvider(StrEnum):
+    NONE = "none"
+    ANTHROPIC = "anthropic"
+    # Canned answers, no network. For local demos and end-to-end tests.
+    FAKE = "fake"
 
 
 class Settings(BaseSettings):
@@ -53,6 +60,12 @@ class Settings(BaseSettings):
     # What the hosted worker may connect to. See ADR 0006.
     egress_mode: EgressMode = EgressMode.PERMISSIVE
     egress_allow_hosts: str = ""  # comma-separated, for allowlist mode
+
+    # AI analysis. Off unless a provider is named. The provider reads its
+    # own credentials from its standard environment (ANTHROPIC_API_KEY).
+    llm_provider: LlmProvider = LlmProvider.NONE
+    llm_model: str = "claude-opus-5-5"
+    llm_effort: Literal["low", "medium", "high", "xhigh", "max"] = "medium"
 
     max_queued_runs_per_workspace: int = Field(default=5, ge=1)
     result_retention_days: int = Field(default=30, ge=1)

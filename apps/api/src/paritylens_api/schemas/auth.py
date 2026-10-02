@@ -3,12 +3,19 @@ from datetime import datetime
 
 from pydantic import EmailStr, Field
 
-from paritylens_api.core.config import AuthMode
+from paritylens_api.core.config import AuthMode, LlmProvider
 from paritylens_api.schemas.common import ApiModel, RequestModel
 
 
 class AuthConfig(ApiModel):
     mode: AuthMode
+
+
+class Features(ApiModel):
+    """What this deployment has switched on."""
+
+    # "none" when no model provider is configured.
+    ai_provider: LlmProvider
 
 
 class DevLogin(RequestModel):
