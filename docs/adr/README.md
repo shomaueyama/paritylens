@@ -1,0 +1,24 @@
+# Architecture Decision Records
+
+設計上の重要な判断を、1件1ファイルで残す。あとから「なぜこうなっているのか」を追えるようにするためのもので、決定を変えるときは既存の ADR を書き換えず、新しい ADR を追加して古いほうの状態を「置き換え済み」にする。
+
+| 番号 | 題 | 状態 |
+|---|---|---|
+| [0001](0001-engine-as-library-with-two-runners.md) | engine をライブラリとして分離し、実行形態を2つ持つ | 採用 |
+| [0002](0002-use-fastapi.md) | バックエンドに FastAPI を使う | 採用 |
+| [0003](0003-use-postgresql.md) | PostgreSQL を使い、ジョブキューも当面 PostgreSQL で持つ | 採用 |
+| [0004](0004-separate-deterministic-and-ai-diff.md) | 決定的 diff と AI 分析を分離する | 採用 |
+
+## 書式
+
+```markdown
+# ADR NNNN: 題
+
+- 状態: 提案 / 採用 / 置き換え済み(→ NNNN)
+- 日付: YYYY-MM-DD
+
+## 背景
+## 決定
+## 検討した他の案
+## 結果
+```
