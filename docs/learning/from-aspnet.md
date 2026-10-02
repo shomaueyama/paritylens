@@ -218,3 +218,14 @@ Roadmap の「仕様書 RAG」で使う予定の技術。ここまでの AI 分�
 - **Vector Search**: 質問のベクトルに近いベクトルを持つ文章を探すこと。PostgreSQL では pgvector 拡張で行う
 - **RAG**: 質問に関係のある文書を検索し、それをモデルに渡して答えさせる構成。モデルが知らない社内の仕様書を根拠に答えさせるときに使う
 
+## Phase 7 で出てきた具体例
+
+| 見るファイル | 見どころ |
+|---|---|
+| `infra/terraform/security.tf` | セキュリティグループ。誰が誰に接続できるかを、1ルール1リソースで書いてある |
+| `infra/terraform/ecs.tf` | タスク定義(コンテナの設計図)とサービス(それを何個動かし続けるか) |
+| `infra/terraform/iam.tf` | 実行ロールとタスクロールの違い。GitHub Actions からのデプロイを OIDC で許可する部分 |
+| `infra/terraform/secrets.tf` | シークレットを Secrets Manager に置き、ECS がコンテナに環境変数として渡す |
+| `.github/workflows/deploy.yml` | イメージをビルドして push し、タスク定義の新しいリビジョンを登録してサービスを切り替える |
+
+Azure の経験があるなら、ECS Fargate は Container Apps、RDS は Azure Database for PostgreSQL、ALB は Application Gateway、Secrets Manager は Key Vault、IAM ロールはマネージド ID に近い。

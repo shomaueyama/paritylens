@@ -126,6 +126,21 @@ jobs:
       - if: failure()
         run: docker compose logs
 
+  terraform:
+    name: Terraform (format, validate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # No AWS account is involved: this checks that the configuration is
+      # well-formed and internally consistent, not that it has been applied.
+      - name: terraform fmt and validate
+        working-directory: infra/terraform
+        run: |
+          tf() { docker run --rm --volume "$PWD:/tf" --workdir /tf hashicorp/terraform:1.9 "$@"; }
+          tf fmt -check -recursive
+          tf init -backend=false -input=false
+          tf validate
+
   secrets:
     name: Secret scan
     runs-on: ubuntu-latest

@@ -4,7 +4,7 @@ API migration compatibility testing.
 
 レガシー API を新しい API に置き換えるとき、「同じ入力に対して同じ挙動をするか」を検証するツール。旧 API と新 API に同じリクエストを送り、レスポンスの差異を検出して重大度を付ける。
 
-> **開発状況**: Phase 6 まで完了。比較エンジン、CLI、API、画面、AI 分析が、ローカルの Docker Compose 上で一通り動く。AI 分析は、HTTP 層を差し替えたテストと偽のプロバイダーでは確認したが、実際のモデルを呼んだ確認はしていない(API キーが必要)。AWS へのデプロイはまだない。
+> **開発状況**: MVP の機能(比較エンジン、CLI、API、画面、AI 分析)は実装済みで、ローカルの Docker Compose 上で一通り動く。**未確認のものが2つある。** AWS へのデプロイは Terraform を書いて `validate` を通しただけで、実際には適用していない。AI 分析は、HTTP 層を差し替えたテストと偽のプロバイダーでは確認したが、実際のモデルを呼んだ確認はしていない(API キーが必要)。
 
 ## Problem
 
@@ -75,7 +75,7 @@ flowchart LR
 | テスト | pytest, Hypothesis, Vitest, React Testing Library, Playwright |
 | 品質 | ruff, mypy (strict), ESLint, gitleaks |
 | HTTP | httpx2(接続処理を差し替えて SSRF 対策を実装) |
-| 実行環境 | Docker Compose, GitHub Actions |
+| 実行環境 | Docker Compose, GitHub Actions, Terraform(AWS: ECS Fargate, RDS, ALB) |
 
 ## Demo
 
@@ -277,7 +277,9 @@ docs/
   adr/             設計判断の記録
   learning/        学習メモ(ASP.NET との対応)
   screenshots/     この README の画像
-infra/docker/      Dockerfile
+infra/
+  docker/          Dockerfile
+  terraform/       AWS の構成
 scripts/           OpenAPI の書き出し
 ```
 
@@ -294,6 +296,7 @@ scripts/           OpenAPI の書き出し
 | [0007](docs/adr/0007-backend-owned-auth.md) | 認証をバックエンドで持つ |
 | [0008](docs/adr/0008-frontend-types-from-openapi.md) | フロントエンドの型を OpenAPI から生成し、読み取りは Server Component で行う |
 | [0009](docs/adr/0009-llm-provider-and-analysis-layer.md) | LLM をプロバイダーの裏に置き、分析を一方通行の層にする |
+| [0010](docs/adr/0010-aws-architecture-and-cost.md) | AWS 構成と費用の判断 |
 
 ## Security
 
@@ -311,6 +314,12 @@ scripts/           OpenAPI の書き出し
 
 **ログ。** ID、件数、所要時間、結果だけを記録する。リクエストやレスポンスのボディ、ヘッダーの値、クエリ文字列、メールアドレスは記録しない。例外は型だけを記録し、メッセージは記録しない。
 
+## Deployment
+
+AWS(ECS Fargate、RDS PostgreSQL、ALB)に置くための Terraform が `infra/terraform/` にある。手順と費用の目安は [infra/terraform/README.md](infra/terraform/README.md)。
+
+**この構成はまだ適用していない。** `terraform validate` と、デプロイ用ワークフローの `actionlint` は通っているが、実際の AWS 上で動かした実績はない。常時起動すると月 100 ドル以上かかる見込みなので、適用するかどうかは費用を見て決めること。
+
 ## Roadmap
 
 | Phase | 内容 | 状態 |
@@ -321,6 +330,6 @@ scripts/           OpenAPI の書き出し
 | 4 | Database + API: 認証、CRUD、hosted 実行 | 完了 |
 | 5 | Dashboard | 完了 |
 | 6 | AI Semantic Analysis | 完了 |
-| 7 | Deployment(AWS) | 未着手 |
+| 7 | Deployment(AWS) | Terraform とデプロイ用ワークフローまで。未適用 |
 
 MVP のあとの計画(仕様書 RAG、テストケース生成、GitHub 連携など)は設計書の 17 章にある。

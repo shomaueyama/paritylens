@@ -13,6 +13,7 @@
 | [0007](0007-backend-owned-auth.md) | 認証をバックエンドで持つ | 採用 |
 | [0008](0008-frontend-types-from-openapi.md) | フロントエンドの型を OpenAPI から生成し、読み取りは Server Component で行う | 採用 |
 | [0009](0009-llm-provider-and-analysis-layer.md) | LLM をプロバイダーの裏に置き、分析を一方通行の層にする | 採用 |
+| [0010](0010-aws-architecture-and-cost.md) | AWS 構成と費用の判断 | 採用(未適用) |
 
 ## 書式
 

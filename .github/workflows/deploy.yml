@@ -1,0 +1,95 @@
+name: Deploy
+
+# Manual only. Nothing is deployed until the AWS resources exist (see
+# infra/terraform/README.md) and these repository variables are set:
+#
+#   AWS_DEPLOY_ROLE_ARN   output "deploy_role_arn" of terraform apply
+#   AWS_REGION            the region deployed into
+#   ECR_REGISTRY          output "ecr_registry" of terraform apply
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # lets the job request the OIDC token AWS trusts
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false # never abandon a rollout halfway
+
+env:
+  CLUSTER: paritylens
+  TAG: ${{ github.sha }}
+
+jobs:
+  deploy:
+    name: Build, push and roll out
+    runs-on: ubuntu-latest
+    # The trust policy of the deploy role only accepts the main branch.
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v7
+
+      # No access key is stored anywhere: GitHub signs a short-lived token
+      # for this run and AWS exchanges it for temporary credentials.
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Log in to the image registry
+        run: |
+          aws ecr get-login-password |
+            docker login --username AWS --password-stdin "${{ vars.ECR_REGISTRY }}"
+
+      - name: Build and push images
+        run: |
+          set -euo pipefail
+          repo="${{ vars.ECR_REGISTRY }}/paritylens"
+
+          python_image() { # name, package, ASGI app
+            docker build --file infra/docker/python-service.Dockerfile \
+              --build-arg "PACKAGE=$2" --build-arg "APP=$3" \
+              --tag "$repo/$1:$TAG" .
+            docker push "$repo/$1:$TAG"
+          }
+          python_image api paritylens-api paritylens_api.main:app
+          python_image legacy-shop-api legacy-shop-api legacy_shop_api.main:app
+          python_image modern-shop-api modern-shop-api modern_shop_api.main:app
+
+          docker build --file infra/docker/web.Dockerfile \
+            --build-arg API_INTERNAL_URL=http://api:8000 \
+            --tag "$repo/web:$TAG" apps/web
+          docker push "$repo/web:$TAG"
+
+      - name: Roll out
+        run: |
+          set -euo pipefail
+          repo="${{ vars.ECR_REGISTRY }}/paritylens"
+
+          roll_out() { # service, task definition family, image
+            # Take the current task definition, change only the image, and
+            # register that as a new revision.
+            aws ecs describe-task-definition --task-definition "$2" --query taskDefinition |
+              jq --arg image "$3" '
+                .containerDefinitions[0].image = $image
+                | del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
+                      .compatibilities, .registeredAt, .registeredBy)
+              ' > task-definition.json
+            arn=$(aws ecs register-task-definition \
+              --cli-input-json file://task-definition.json \
+              --query taskDefinition.taskDefinitionArn --output text)
+            aws ecs update-service --cluster "$CLUSTER" --service "$1" \
+              --task-definition "$arn" > /dev/null
+          }
+
+          # The API first: its container applies database migrations on start.
+          roll_out api paritylens-api "$repo/api:$TAG"
+          aws ecs wait services-stable --cluster "$CLUSTER" --services api
+
+          roll_out worker paritylens-worker "$repo/api:$TAG"
+          roll_out web paritylens-web "$repo/web:$TAG"
+          roll_out legacy-shop-api paritylens-legacy-shop-api "$repo/legacy-shop-api:$TAG"
+          roll_out modern-shop-api paritylens-modern-shop-api "$repo/modern-shop-api:$TAG"
+          aws ecs wait services-stable --cluster "$CLUSTER" \
+            --services worker web legacy-shop-api modern-shop-api
