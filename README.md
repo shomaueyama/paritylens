@@ -4,7 +4,7 @@ API migration compatibility testing.
 
 レガシー API を新しい API に置き換えるとき、「同じ入力に対して同じ挙動をするか」を検証するツール。旧 API と新 API に同じリクエストを送り、レスポンスの差異を検出して重大度を付ける。
 
-> **開発状況**: Phase 4(API とデータベース)まで完了。CLI での比較に加えて、プロジェクトやテストケースを API で登録し、サーバー側で実行して結果を保存できる。Web の画面と AI による説明はまだない。進み具合は [Roadmap](#roadmap) を参照。
+> **開発状況**: Phase 6 まで完了。比較エンジン、CLI、API、画面、AI 分析が、ローカルの Docker Compose 上で一通り動く。AI 分析は、HTTP 層を差し替えたテストと偽のプロバイダーでは確認したが、実際のモデルを呼んだ確認はしていない(API キーが必要)。AWS へのデプロイはまだない。
 
 ## Problem
 
@@ -26,6 +26,16 @@ ParityLens は差異を3段階で絞り込む。
 3. **AI が説明する。** 分類済みの差異を LLM に渡し、なぜ問題になりうるかを説明させる。AI の見解は参考情報で、合否には影響しない
 
 設計の全体は [MVP System Design](docs/architecture/mvp-system-design.md) にある。
+
+## Screenshots
+
+実行結果。同じ差異が複数のケースに出ても1件にまとめ、重大度の高い順に並べる。ID とタイムスタンプは、ルールを書かなくても Safe differences に入る。
+
+![実行結果](docs/screenshots/run-result.png)
+
+ケースの詳細。新旧のリクエストとレスポンスを並べて表示する。「Ignore this」は、その差異を無視するルールとして保存する。
+
+![ケースの詳細](docs/screenshots/case-detail.png)
 
 ## Architecture
 
@@ -58,10 +68,11 @@ flowchart LR
 
 | 領域 | 技術 |
 |---|---|
-| Frontend | Next.js (App Router), React, TypeScript, Tailwind CSS |
+| Frontend | Next.js 16 (App Router), React 19, TypeScript, Tailwind CSS, TanStack Query, React Hook Form, Zod |
 | Backend | Python, FastAPI, Pydantic, SQLAlchemy (async), Alembic |
 | Database | PostgreSQL |
-| テスト | pytest, Vitest, React Testing Library |
+| AI | Anthropic SDK(プロバイダーは差し替え可能) |
+| テスト | pytest, Hypothesis, Vitest, React Testing Library, Playwright |
 | 品質 | ruff, mypy (strict), ESLint, gitleaks |
 | HTTP | httpx2(接続処理を差し替えて SSRF 対策を実装) |
 | 実行環境 | Docker Compose, GitHub Actions |
@@ -161,13 +172,38 @@ docker compose up --build
 
 | URL | 内容 |
 |---|---|
-| http://localhost:3000 | Web |
+| http://localhost:3000 | Web。メールアドレスを入力するだけの開発ログインで入れる |
 | http://localhost:8000/docs | API(OpenAPI の画面) |
 | (ポートなし) | worker(キューに入った実行を処理する) |
 | http://localhost:8001/docs | Legacy Shop API |
 | http://localhost:8002/docs | Modern Shop API |
 
 設定を変えたい場合は `.env.example` を `.env` にコピーして編集する。コピーしなくても既定値で起動する。
+
+### 画面から使う
+
+1. http://localhost:3000 を開き、任意のメールアドレスでログインする
+2. プロジェクトを作る。Docker Compose 上の worker からデモ API に届く URL は、旧が `http://legacy-shop-api:8000`、新が `http://modern-shop-api:8000`
+3. Rules で `Unordered array`、パス `$.items`、キー `sku` を追加する
+4. Test cases でテストケースを作る(例: `POST /orders` に `{"customer_name": "John", "items": [{"sku": "B-200", "quantity": 1}, {"sku": "A-100", "quantity": 1}]}`)
+5. Overview の「Run now」を押す。worker が実行し、結果の画面に切り替わる
+
+### AI による説明
+
+差異が見つかったあと、それぞれが利用側にとって問題になりそうかを LLM に説明させることができる。既定では無効で、次の2つが揃ったときだけ動く。
+
+- デプロイにプロバイダーが設定されている(`PARITYLENS_LLM_PROVIDER`)
+- プロジェクトの Settings で「Explain differences with AI」を有効にしている
+
+```bash
+# 実際のモデルを使う
+ANTHROPIC_API_KEY=sk-ant-... PARITYLENS_LLM_PROVIDER=anthropic docker compose up --build
+
+# API キーなしで流れだけ見る(決まった文面を返す偽のプロバイダー)
+PARITYLENS_LLM_PROVIDER=fake docker compose up --build
+```
+
+AI の見解は、重大度とは別の枠で表示される。重大度・判定・スコア・CLI の終了コードには影響しない。モデルに送るのは、ノイズを除いた差異の要約(パスと、短く切った値の例)だけである。考え方は [ADR 0004](docs/adr/0004-separate-deterministic-and-ai-diff.md) と [ADR 0009](docs/adr/0009-llm-provider-and-analysis-layer.md) にある。
 
 ### 結果をサーバーに保存する
 
@@ -205,12 +241,24 @@ uv run ruff format --check . # フォーマットの確認
 uv run mypy                 # 型検査(strict)
 
 cd apps/web
-npm test                    # Vitest
+npm test                    # Vitest(コンポーネントと関数)
 npm run lint
 npm run typecheck
+npm run test:e2e            # Playwright。docker compose up しておく
 ```
 
-CI(GitHub Actions)では、上記に加えて `docker compose up` の起動確認、起動したデモ API に対する `paritylens run` の実行、gitleaks による秘密情報の検査を行う。
+テストの置き方:
+
+| 対象 | 方法 |
+|---|---|
+| 比較エンジン | 例示テスト + Hypothesis による性質テスト。I/O がないのでモックもない |
+| 実行エンジン | HTTP をモックトランスポートに差し替え。SSRF 対策は、ローカルのサーバーに実際に接続して確認 |
+| API | 実際の PostgreSQL。1テスト1トランザクションで、終わったらロールバック |
+| テナント分離 | アプリの全ルートを OpenAPI から列挙し、他人の ID で叩いてすべて 404 になることを確認 |
+| 画面 | Vitest + React Testing Library。全体の流れは Playwright で実際のブラウザから |
+| AI 分析 | 偽のプロバイダーで流れを、HTTP 層の差し替えでリクエストの形を確認。モデルの見解の質は `apps/api/evals/` で手動評価 |
+
+CI(GitHub Actions)では、上記に加えて `docker compose up` の起動確認、起動したデモ API に対する `paritylens run` の実行、Playwright による E2E、OpenAPI から生成した型が最新であることの確認、gitleaks による秘密情報の検査を行う。
 
 ## Repository Structure
 
@@ -227,8 +275,10 @@ demo/
 docs/
   architecture/    設計書
   adr/             設計判断の記録
-  learning/        学習メモ
+  learning/        学習メモ(ASP.NET との対応)
+  screenshots/     この README の画像
 infra/docker/      Dockerfile
+scripts/           OpenAPI の書き出し
 ```
 
 ## Technical Decisions
@@ -242,6 +292,8 @@ infra/docker/      Dockerfile
 | [0005](docs/adr/0005-noise-detection.md) | ノイズの検出に、2回実行とリクエスト時刻への追従を使う |
 | [0006](docs/adr/0006-egress-policy.md) | 外向き通信を EgressPolicy で制御する |
 | [0007](docs/adr/0007-backend-owned-auth.md) | 認証をバックエンドで持つ |
+| [0008](docs/adr/0008-frontend-types-from-openapi.md) | フロントエンドの型を OpenAPI から生成し、読み取りは Server Component で行う |
+| [0009](docs/adr/0009-llm-provider-and-analysis-layer.md) | LLM をプロバイダーの裏に置き、分析を一方通行の層にする |
 
 ## Security
 
@@ -267,8 +319,8 @@ infra/docker/      Dockerfile
 | 2 | Deterministic Diff: 正規化、差異の分類、ノイズ検出、重大度 | 完了 |
 | 3 | Execution + CLI: `paritylens run` | 完了 |
 | 4 | Database + API: 認証、CRUD、hosted 実行 | 完了 |
-| 5 | Dashboard | 未着手 |
-| 6 | AI Semantic Analysis | 未着手 |
+| 5 | Dashboard | 完了 |
+| 6 | AI Semantic Analysis | 完了 |
 | 7 | Deployment(AWS) | 未着手 |
 
 MVP のあとの計画(仕様書 RAG、テストケース生成、GitHub 連携など)は設計書の 17 章にある。

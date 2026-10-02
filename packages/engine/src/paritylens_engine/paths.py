@@ -23,6 +23,7 @@ __all__ = [
     "PathSyntaxError",
     "Pattern",
     "generalize",
+    "generalize_text",
     "last_field_name",
     "parse_pattern",
     "render",
@@ -123,6 +124,33 @@ def generalize(path: Path) -> str:
         else:
             parts.append(render((segment,))[1:])
     return "".join(parts)
+
+
+def generalize_text(location: str) -> str | None:
+    """generalize() for a path that only exists as text, e.g. one read back
+    from storage. None if the text is not a path into a JSON body.
+
+    It parses the text properly instead of pattern-matching on brackets, so
+    a key that itself contains "[0]" or "=" is left alone.
+    """
+    if not location.startswith("$"):
+        return None
+    try:
+        segments = parse_pattern(location).segments
+    except PathSyntaxError:
+        return None
+    path: list[Segment] = []
+    for segment in segments:
+        match segment:
+            case _Key(name):
+                path.append(name)
+            case _Index(index):
+                path.append(index)
+            case KeyMatch():
+                path.append(segment)
+            case _:
+                return None  # already a pattern, not a concrete path
+    return generalize(tuple(path))
 
 
 def last_field_name(path: Path) -> str | None:

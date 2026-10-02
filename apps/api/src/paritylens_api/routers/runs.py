@@ -1,21 +1,26 @@
 """Runs: starting one, uploading one, and reading results."""
 
+import json
 import uuid
 from collections import Counter
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Query
-from paritylens_engine import Severity
+from paritylens_engine import DiffKind, Severity
 from paritylens_engine.model import RuleSet
 from paritylens_engine.report import RunReport
 from pydantic import ValidationError
 from sqlalchemy import case, func, select, tuple_
+from sqlalchemy.dialects.postgresql import distinct_on
 from sqlalchemy.orm import selectinload
 
-from paritylens_api.core.errors import InvalidRequestError, TooManyRequestsError
+from paritylens_api.ai.factory import initial_ai_status
+from paritylens_api.core.config import LlmProvider
+from paritylens_api.core.errors import ConflictError, InvalidRequestError, TooManyRequestsError
 from paritylens_api.deps import PrincipalDep, SessionDep, SettingsDep
 from paritylens_api.models import (
+    AiAnalysis,
     CaseResult,
     Difference,
     Project,
@@ -33,10 +38,15 @@ from paritylens_api.repositories.owned import (
     list_children,
 )
 from paritylens_api.schemas.runs import (
+    AnalysisOut,
     CaseResultDetail,
     CaseResultSummary,
+    DifferenceOut,
+    Finding,
+    FindingCase,
     RunDetail,
     RunDifference,
+    RunFindings,
     RunOut,
     RunPage,
 )
@@ -111,7 +121,11 @@ async def start_run(
 
 @router.post("/projects/{project_id}/runs/import", status_code=201)
 async def import_run(
-    project_id: uuid.UUID, report: RunReport, principal: PrincipalDep, session: SessionDep
+    project_id: uuid.UUID,
+    report: RunReport,
+    principal: PrincipalDep,
+    session: SessionDep,
+    settings: SettingsDep,
 ) -> RunOut:
     """Store a report produced elsewhere, e.g. by `paritylens run --upload`."""
     project = await get_project(session, principal.workspace_id, project_id)
@@ -132,6 +146,7 @@ async def import_run(
     session.add(run)
     await session.flush()
     save_report(session, run, report, [by_name.get(case.name) for case in report.cases])
+    run.ai_status = initial_ai_status(project, settings)
     await session.flush()
     await session.refresh(run)
     return RunOut.model_validate(run)
@@ -186,11 +201,45 @@ async def read_run(run_id: uuid.UUID, principal: PrincipalDep, session: SessionD
     cases = await session.scalars(
         select(CaseResult).where(CaseResult.run_id == run.id).order_by(CaseResult.position)
     )
+    analyses = await session.scalars(
+        select(AiAnalysis).where(AiAnalysis.run_id == run.id).order_by(AiAnalysis.created_at)
+    )
     return RunDetail(
         **RunOut.model_validate(run).model_dump(),
         rules=RuleSet.model_validate(run.rules_snapshot or {}),
         cases=[CaseResultSummary.model_validate(case) for case in cases],
+        analyses=[AnalysisOut.model_validate(analysis) for analysis in analyses],
     )
+
+
+MAX_ANALYSES_PER_RUN = 5
+
+
+@router.post("/runs/{run_id}/analysis", status_code=202)
+async def request_analysis(
+    run_id: uuid.UUID, principal: PrincipalDep, session: SessionDep, settings: SettingsDep
+) -> RunOut:
+    """Queue (or queue again) the AI analysis of a completed run."""
+    run = await get_child(session, Run, principal.workspace_id, run_id)
+    project = await get_project(session, principal.workspace_id, run.project_id)
+    if run.status != "completed":
+        raise ConflictError("only a completed run can be analysed")
+    if not project.ai_enabled:
+        raise InvalidRequestError("AI analysis is turned off for this project")
+    if settings.llm_provider is LlmProvider.NONE:
+        raise InvalidRequestError("this deployment has no AI provider configured")
+    if run.ai_status in ("pending", "running"):
+        raise ConflictError("an analysis of this run is already under way")
+    # Every analysis is a paid call to a model.
+    if run.ai_attempts >= MAX_ANALYSES_PER_RUN:
+        raise TooManyRequestsError(
+            f"this run has been analysed {run.ai_attempts} times; start a new run instead"
+        )
+    run.ai_status = "pending"
+    run.ai_error = None
+    await session.flush()
+    await session.refresh(run)
+    return RunOut.model_validate(run)
 
 
 @router.get("/runs/{run_id}/differences")
@@ -229,6 +278,79 @@ async def list_differences(
     ]
 
 
+MAX_FINDINGS = 500
+MAX_CASES_PER_FINDING = 10
+
+
+@router.get("/runs/{run_id}/findings")
+async def list_findings(
+    run_id: uuid.UUID, principal: PrincipalDep, session: SessionDep
+) -> RunFindings:
+    """The run's distinct differences, most severe first, noise included (severity none)."""
+    run = await get_child(session, Run, principal.workspace_id, run_id)
+    joined = (
+        select(Difference)
+        .join(StepResult, Difference.step_result_id == StepResult.id)
+        .join(CaseResult, StepResult.case_result_id == CaseResult.id)
+        .where(Difference.run_id == run.id)
+    )
+    group = (Difference.signature, Difference.severity)
+    rank = case({severity.value: severity.rank for severity in Severity}, value=Difference.severity)
+
+    # One row per finding: how often, and in which cases.
+    case_entry = func.jsonb_build_object(
+        "position", CaseResult.position, "id", CaseResult.id, "name", CaseResult.name
+    )
+    totals = (
+        await session.execute(
+            joined.with_only_columns(
+                *group,
+                func.count().label("count"),
+                func.jsonb_agg(case_entry.distinct()).label("cases"),
+            )
+            .group_by(*group)
+            .order_by(rank.desc(), func.min(CaseResult.position), Difference.signature)
+            .limit(MAX_FINDINGS + 1)
+        )
+    ).all()
+
+    # One example per finding: the first occurrence in run order.
+    examples = {
+        (difference.signature, difference.severity): difference
+        for difference in await session.scalars(
+            joined.ext(distinct_on(*group)).order_by(
+                *group, CaseResult.position, StepResult.position, Difference.position
+            )
+        )
+    }
+
+    findings = []
+    for signature, severity, count, cases in totals[:MAX_FINDINGS]:
+        example = examples[(signature, severity)]
+        ordered = sorted(cases, key=lambda entry: entry["position"])
+        findings.append(
+            Finding(
+                signature=signature,
+                severity=severity,
+                kind=DiffKind(example.kind),
+                path=signature.partition(":")[2],
+                is_body_path=example.path.startswith("$"),
+                count=count,
+                example=DifferenceOut(**_difference_fields(example)),
+                case_count=len(ordered),
+                cases=[FindingCase(**entry) for entry in ordered[:MAX_CASES_PER_FINDING]],
+            )
+        )
+    return RunFindings(findings=findings, truncated=len(totals) > MAX_FINDINGS)
+
+
+def pattern_of(difference: Difference) -> str | None:
+    """The rule pattern for a difference inside a JSON body, else None."""
+    if not difference.path.startswith("$"):
+        return None
+    return difference.signature.partition(":")[2] or None
+
+
 def _difference_fields(difference: Difference) -> dict[str, Any]:
     return {
         "id": difference.id,
@@ -241,6 +363,10 @@ def _difference_fields(difference: Difference) -> dict[str, Any]:
         "reason": difference.reason,
         "noise_source": difference.noise_source,
         "hints": difference.hints,
+        "old_text": json.dumps(difference.old_value, ensure_ascii=False),
+        "new_text": json.dumps(difference.new_value, ensure_ascii=False),
+        "signature": difference.signature,
+        "pattern": pattern_of(difference),
     }
 
 
@@ -259,4 +385,14 @@ async def read_case_result(
         .where(CaseResult.id == owned.id)
         .options(selectinload(CaseResult.steps).selectinload(StepResult.differences))
     )
-    return CaseResultDetail.model_validate(case)
+    detail = CaseResultDetail.model_validate(case)
+    if case is not None:
+        # Fields that are computed, not columns.
+        computed = {d.id: _difference_fields(d) for step in case.steps for d in step.differences}
+        for step_out in detail.steps:
+            for difference_out in step_out.differences:
+                fields = computed[difference_out.id]
+                difference_out.pattern = fields["pattern"]
+                difference_out.old_text = fields["old_text"]
+                difference_out.new_text = fields["new_text"]
+    return detail

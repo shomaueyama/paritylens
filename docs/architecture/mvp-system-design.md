@@ -1,7 +1,7 @@
 # ParityLens MVP System Design
 
 - 状態: Draft(実装前)
-- 最終更新: 2026-10-02(Phase 4 完了時点)
+- 最終更新: 2026-10-02(Phase 6 完了時点)
 - 対象: MVP(v0.1)。それ以降は「20. Future scalability」と Roadmap を参照
 
 ParityLens は、レガシー API を新 API に置き換えるときに「同じ入力に対して同じ挙動をするか」を検証するツールである。旧 API と新 API に同じリクエストを送り、差異を決定的なアルゴリズムで検出・分類し、そのうえで LLM が「その差異が意味的に重要か」を補助的に説明する。
@@ -194,7 +194,7 @@ Next.js(App Router)+ TypeScript + Tailwind CSS + shadcn/ui。
 | `/projects/[projectId]/rules` | 比較ルール |
 | `/projects/[projectId]/settings` | Base URL、シークレット、AI 分析の有効化 |
 | `/projects/[projectId]/runs` | 実行履歴 |
-| `/runs/[runId]` | Compatibility Result |
+| `/runs/[runId]` | Compatibility Result。差異は signature ごとにまとめて表示する(まとめる処理はバックエンド) |
 | `/runs/[runId]/cases/[caseResultId]` | ケース詳細: 新旧レスポンスの並列表示、差異、AI の説明 |
 | `/settings/tokens` | CLI 用 API トークン |
 
@@ -310,8 +310,8 @@ erDiagram
 | `runs` | project_id, source(hosted/cli), status, ai_status, old_base_url, new_base_url, rules_snapshot(JSONB), suite_snapshot(JSONB), summary(JSONB), engine_version, error, started_at, finished_at | 実行時点の設定を保存。suite_snapshot にシークレットの値は入れず、参照名のまま持つ |
 | `case_results` | run_id, test_case_id(null 可), case_name, verdict, max_severity, error | テストケースを消しても結果は残す |
 | `step_results` | case_result_id, position, step_id, outcome, old(JSONB), new(JSONB), notes(JSONB) | old / new はリクエストとレスポンスの記録。ボディは上限サイズで切り詰める |
-| `differences` | step_result_id, run_id, position, kind, path, old_value(JSONB), new_value(JSONB), detail, severity, reason, noise_source, hints(JSONB) | |
-| `ai_analyses` | difference_id(unique), verdict, confidence, explanation, provider, model, prompt_version | Phase 6 で追加 |
+| `differences` | step_result_id, run_id, position, kind, path, old_value(JSONB), new_value(JSONB), detail, severity, reason, noise_source, hints(JSONB), signature | |
+| `ai_analyses` | run_id, signature, verdict, confidence, explanation, provider, model, prompt_version | 差異そのものではなく、差異の signature(種類 + 一般化したパス)ごとに1行。同じ差異が複数のケースに出ても1回だけ分析する |
 
 判断したこと:
 
@@ -349,7 +349,9 @@ REST、プレフィックスは `/api/v1`。認証はブラウザがセッショ
 | POST | `/projects/{id}/runs/import` | CLI が RunReport を送る |
 | GET | `/projects/{id}/runs` | |
 | GET | `/runs/{id}` | 概要、スコア、状態 |
-| GET | `/runs/{id}/differences` | 重大度・種類で絞り込み |
+| GET | `/runs/{id}/findings` | 差異を signature ごとにまとめたもの。画面はこれを使う |
+| GET | `/runs/{id}/differences` | 個々の差異。重大度で絞り込み |
+| GET | `/features` | このデプロイで有効な機能(AI プロバイダー) |
 | GET | `/case-results/{id}` | ステップ、新旧レスポンス、差異、AI の見解 |
 | POST | `/runs/{id}/analysis` | AI 分析のやり直し |
 
@@ -539,14 +541,14 @@ cases:
 入力(run 単位でまとめる):
 
 - Endpoint、リクエストの概要(秘密情報は除去済み)
-- 重大度 LOW 以上の差異: ID、kind、パス、新旧の値(長い値は切り詰め)、決定的な重大度
-- 同じ signature(Endpoint + kind + 一般化したパス)の差異は1件に集約して渡す
+- 重大度 LOW 以上の差異を、signature(kind + 一般化したパス)と重大度ごとに1件(finding)にまとめたもの: ID、kind、パス、新旧の値の例(300 文字で切り詰め)、決定的な重大度、出現したケース名
+- 1回の実行につき1リクエスト、最大 60 件
 
 出力(構造化出力を Pydantic で検証):
 
 | フィールド | 内容 |
 |---|---|
-| `difference_id` | 入力にあった ID。存在しない ID が返ってきたら破棄する |
+| `finding_id` | 入力にあった finding の ID。存在しない ID が返ってきたら破棄する |
 | `verdict` | `safe` / `warning` / `breaking` |
 | `confidence` | `low` / `medium` / `high` |
 | `explanation` | なぜ問題になりうるか、または問題にならないか |
@@ -561,6 +563,8 @@ class LLMProvider(Protocol):
 ```
 
 実装は `AnthropicProvider` と、テスト用の `FakeProvider`。モデルは環境変数で指定する。分析ロジック(`ai/analyzer.py`)は `LLMProvider` にだけ依存し、SDK を直接 import しない。プロンプトにはバージョンを付け、結果と一緒に保存する。
+
+実際のインターフェースは `complete_json(system, user, schema) -> dict` で、JSON スキーマに従った JSON を返すという1つの操作だけを持つ(ADR 0009)。
 
 ### 画面での扱い
 
@@ -755,8 +759,8 @@ paritylens/
 | 0005 | ノイズの検出に、2回実行とリクエスト時刻への追従を使う | 済 |
 | 0006 | 外向き通信の制御(EgressPolicy) | 済 |
 | 0007 | 認証をバックエンドで持つ | 済 |
-| 0008 | フロントエンドの型を OpenAPI から生成する | Phase 5 |
-| 0009 | LLM プロバイダーを抽象化する | Phase 6 |
+| 0008 | フロントエンドの型を OpenAPI から生成し、読み取りは Server Component で行う | 済 |
+| 0009 | LLM をプロバイダーの裏に置き、分析を一方通行の層にする | 済 |
 | 0010 | AWS 構成と費用の判断 | Phase 7 |
 
 ### デモ API に仕込む差異

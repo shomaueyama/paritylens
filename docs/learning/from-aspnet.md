@@ -146,3 +146,75 @@ async def read_project(project_id: uuid.UUID, principal: PrincipalDep, session: 
 ### SELECT ... FOR UPDATE SKIP LOCKED
 
 worker がキューから1件取るときの SQL。`FOR UPDATE` は取得した行をロックし、`SKIP LOCKED` は他のトランザクションがロックしている行を飛ばす。複数の worker が同時に同じテーブルを見ても、同じ行を2回取ることがない。`tests/test_worker_concurrency.py` が、6つの worker に3件を取り合わせて確かめている。
+
+## Phase 5 で出てきた具体例
+
+Next.js の App Router。ASP.NET の経験からいちばん遠い部分で、「どのコードがどこで動くか」を意識する必要がある。
+
+| 見るファイル | ASP.NET でいうと | 見どころ |
+|---|---|---|
+| `app/(app)/projects/page.tsx` | Razor Page の `OnGetAsync` + View | Server Component。サーバーで API を呼び、HTML を返す。ブラウザにはこのコードは送られない |
+| `app/(app)/layout.tsx` | `_Layout.cshtml` + `[Authorize]` | 配下の全ページを包む。ここで `requireUser()` を呼ぶので、ログインしていなければページ本体は描画されない |
+| `components/forms/project-form.tsx` | Blazor のコンポーネント | `"use client"` で始まる Client Component。状態(`useState`)とイベントはここにしか書けない |
+| `lib/api/server.ts` と `lib/api/client.ts` | 型付き `HttpClient`(NSwag など) | OpenAPI から生成した型を使う。URL、パラメータ、レスポンスのすべてに型が付く |
+| `components/run-poller.tsx` | SignalR を使うほどでもないポーリング | TanStack Query の `refetchInterval`。終わったら `router.refresh()` でサーバーに再描画させる |
+| `proxy.ts` | ミドルウェア | ページの描画前に動く。ここでは未ログインをログイン画面へ送るだけ |
+| `app/(app)/error.tsx` | 例外フィルター / エラーページ | 配下のページが描画中に例外を投げると、これが表示される |
+| `e2e/migration-check.spec.ts` | Playwright for .NET | 実際のブラウザで、ログインから結果確認までを通す |
+
+### Server Component と Client Component の境界
+
+```
+Server Component(既定)            Client Component("use client")
+─────────────────────────         ─────────────────────────────
+サーバーで実行される                  ブラウザで実行される(初回はサーバーでも描画)
+await でデータを取れる                useState / useEffect / onClick が使える
+Cookie を読める                      ブラウザの API(window など)を使える
+状態もイベントも持てない              サーバーの秘密には触れない
+```
+
+Server Component から Client Component へは、props でデータを渡す。渡せるのは JSON にできる値だけで、関数は渡せない。`components/delete-button.tsx` が「何を消すか」を関数ではなくデータ(`{ kind: "rule", id }`)で受け取っているのは、このためである。
+
+### React の state
+
+Blazor の `@bind` のような双方向バインドはない。値は state に持ち、変えるときは setter を呼ぶ。setter を呼ぶと、そのコンポーネントの関数がもう一度実行されて、画面が作り直される。
+
+```tsx
+const [email, setEmail] = useState("");
+<input value={email} onChange={(event) => setEmail(event.target.value)} />
+```
+
+`email = "x"` と直接書き換えても、画面は変わらない。再実行のきっかけがないからである。
+
+### 数値が変わってしまう問題
+
+`JSON.parse` は、すべての数値を 64 ビット浮動小数点数にする。`9007199254740993` は `9007199254740992` になり、`1.0` は `1` になる。C# なら `long` と `decimal` を使い分けるところである。
+
+新旧の値の違いを見せるツールなので、これは困る。表示用の値はバックエンドから文字列でも送り(`old_text` / `new_text`)、テストケースの JSON は `lossless-json` で扱う(`lib/json.ts`)。レビューで指摘されて直した箇所である。
+
+## Phase 6 で出てきた具体例
+
+| 見るファイル | 見どころ |
+|---|---|
+| `ai/provider.py` | LLM に対するインターフェース。`Protocol` なので、実装側は継承を宣言しなくてよい |
+| `ai/anthropic_provider.py` | SDK を import する唯一のファイル。構造化出力(JSON スキーマ)、拒否(`stop_reason == "refusal"`)の扱い、例外の変換 |
+| `ai/prompt.py` | システムプロンプトと、回答の JSON スキーマ。プロンプトにはバージョンを付ける |
+| `ai/analyzer.py` | 差異の要約 → モデル → 検証 → 保存。モデルの回答を「信用できない入力」として検証している |
+| `ai/fake_provider.py` | テストとデモ用の実装。インターフェースがあるから、これを差し込める |
+| `tests/test_ai.py` | 「モデルが何を言っても結果は変わらない」ことのテスト。プロンプトインジェクションを仕込んだレスポンスも使う |
+
+### LLM を組み込むときの考え方
+
+- **LLM は関数ではない。** 同じ入力に同じ出力を返す保証がない。だから、正しさが必要な判断(差異の検出、重大度)には使わず、説明にだけ使う
+- **出力は検証する。** JSON スキーマで形を制約しても、中身(存在しない ID への回答など)は自分で確かめる
+- **入力に指示が混ざる。** モデルに渡すデータの中に「これまでの指示を無視せよ」と書かれていることがある。防ぎきれないので、だまされても被害が出ない位置に置く
+- **テストは2種類要る。** 「何が返ってきても壊れない」は単体テストで、「返ってくる内容が妥当」は評価セット(`apps/api/evals/`)で見る
+
+### Embedding、Vector Search、RAG(このプロジェクトではまだ使っていない)
+
+Roadmap の「仕様書 RAG」で使う予定の技術。ここまでの AI 分析は、差異そのものをモデルに渡しているだけで、検索はしていない。
+
+- **Embedding**: 文章を数百〜数千個の数値の並び(ベクトル)に変換したもの。意味の近い文章は、ベクトルも近くなる
+- **Vector Search**: 質問のベクトルに近いベクトルを持つ文章を探すこと。PostgreSQL では pgvector 拡張で行う
+- **RAG**: 質問に関係のある文書を検索し、それをモデルに渡して答えさせる構成。モデルが知らない社内の仕様書を根拠に答えさせるときに使う
+
