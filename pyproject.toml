@@ -1,0 +1,64 @@
+# Root of the uv workspace. This project is never built or published itself;
+# it only ties the member packages together and holds shared tool settings.
+[project]
+name = "paritylens-workspace"
+version = "0.0.0"
+requires-python = ">=3.13"
+dependencies = []
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["apps/api", "packages/*"]
+
+[dependency-groups]
+dev = [
+    "httpx2>=2.13", # HTTP client behind FastAPI's TestClient
+    "mypy>=1.14",
+    "pytest>=8.3",
+    "ruff>=0.9",
+    # Workspace members, installed editable so tests and mypy can import them.
+    "paritylens-api",
+    "paritylens-engine",
+]
+
+[tool.uv.sources]
+paritylens-api = { workspace = true }
+paritylens-engine = { workspace = true }
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+extend-exclude = ["apps/web"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle
+    "F",   # pyflakes
+    "I",   # import order
+    "B",   # bugbear: likely bugs
+    "UP",  # prefer modern syntax
+    "SIM", # simplifications
+    "S",   # security (bandit)
+    "RUF",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"**/tests/**" = ["S101"] # assert is how pytest works
+
+[tool.mypy]
+strict = true
+python_version = "3.13"
+files = [
+    "apps/api/src",
+    "apps/api/tests",
+    "packages/engine/src",
+    "packages/engine/tests",
+]
+
+[tool.pytest.ini_options]
+# importlib mode lets each package keep its own tests/ directory without
+# the test modules colliding on import.
+addopts = "--import-mode=importlib --strict-markers"
+testpaths = ["apps/api/tests", "packages/engine/tests"]
