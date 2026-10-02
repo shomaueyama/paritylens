@@ -83,3 +83,29 @@ Phase 2 は `packages/engine` だけで完結する。Web も DB も出てこな
 `compare_step(old, new, rules, baseline)` は、引数だけから結果が決まる。時計も乱数もネットワークも触らない。受信時刻が必要な判定(リクエスト時刻への追従)も、時刻を引数として受け取る形にしてある。
 
 C# でいえば、`DateTime.Now` を直接呼ばずに `TimeProvider` を注入するのと同じ発想だが、ここではさらに進めて、値そのものを渡している。おかげで engine のテストにはモックが1つもない。
+
+## Phase 3 で出てきた具体例
+
+Phase 3 で初めて I/O が出てくる。非同期処理と HTTP クライアントが中心。
+
+| 見るファイル | C# / .NET でいうと | 見どころ |
+|---|---|---|
+| `executor.py` の `async def` / `await` | `async Task` / `await` | 文法はほぼ同じ。`asyncio.gather(a, b, c)` が `Task.WhenAll`、`asyncio.Semaphore` が `SemaphoreSlim`、`asyncio.timeout(30)` が `CancellationTokenSource(TimeSpan)` に当たる |
+| `executor.py` の `httpx2.AsyncClient` | `HttpClient` | 1回の実行で1つ作って使い回す(接続プールを共有する)。この点も `HttpClient` と同じ |
+| `transport.py` の `GuardedTransport` | `DelegatingHandler` / `SocketsHttpHandler.ConnectCallback` | HTTP クライアントの下層を差し替える。.NET で SSRF 対策をするなら `ConnectCallback` で同じことをする |
+| `tests/test_executor.py` の `MockTransport` | `HttpMessageHandler` を差し替えたテスト | ネットワークに出ずに、リクエストを受け取る関数でレスポンスを返す |
+| `packages/cli/.../main.py` | `System.CommandLine` | 関数の引数と型注釈が、そのままコマンドライン引数の定義になる(Typer)。FastAPI と同じ作者で、考え方も同じ |
+| `suite.py` の `model_validator` | `IValidatableObject.Validate` | フィールドをまたぐ検証。「変数は使う前に取得されていること」を読み込み時に確かめる |
+| ルートの `conftest.py` | xUnit の `IClassFixture` / `WebApplicationFactory` | テスト用にアプリを実ポートで起動する fixture |
+
+### async / await で C# と違うところ
+
+- **スレッドは1本。** .NET の `await` は継続をスレッドプールで再開するが、Python の asyncio は1つのスレッドのイベントループで順番に進める。待っている間に別の処理が進むだけで、同時に2つのコードが走ることはない。そのためロックはほとんど要らない
+- **同期のブロッキング呼び出しは全体を止める。** `time.sleep(1)` や同期の HTTP 呼び出しを `async def` の中で使うと、その間ほかのリクエストも全部止まる。.NET の `.Result` によるデッドロックとは症状が違うが、「async の中で同期 I/O を使わない」という規律は同じ
+- **`asyncio.run()` が入口。** 同期の世界から非同期の関数を呼ぶ唯一の場所。CLI の `main.py` に1回だけ出てくる
+
+### SSRF 対策の要点
+
+`http://evil.example/` が安全かどうかは、URL を見てもわからない。`evil.example` がどの IP に解決されるかで決まり、それは攻撃者が決められる。だから検査の対象は URL ではなく、実際に接続する IP アドレスである。
+
+さらに、検査のときと接続のときで名前解決を別々に行うと、その間に答えを変えられる(DNS rebinding)。`GuardedBackend.connect_tcp` が名前解決・検査・接続を1つの関数の中で行っているのは、このためである。`tests/test_transport.py` の `test_dns_rebinding_gets_no_second_lookup_to_exploit` が、名前解決が1回しか行われないことを確かめている。
