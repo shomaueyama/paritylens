@@ -1,0 +1,100 @@
+# Local development stack: docker compose up --build
+#
+#   http://localhost:3000   web (Next.js)
+#   http://localhost:8000   api (FastAPI)       docs at /docs
+#   http://localhost:8001   legacy-shop-api     the "old" demo API
+#   http://localhost:8002   modern-shop-api     the "new" demo API
+#   localhost:5432          PostgreSQL
+#
+# Ports are bound to 127.0.0.1 so nothing is reachable from the network.
+
+name: paritylens
+
+x-python-service: &python-service
+  healthcheck:
+    test:
+      - CMD
+      - python
+      - -c
+      - import urllib.request; urllib.request.urlopen("http://localhost:8000/health")
+    interval: 5s
+    timeout: 3s
+    retries: 10
+
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-paritylens}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local-dev-only}
+      POSTGRES_DB: ${POSTGRES_DB:-paritylens}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: infra/docker/python-service.Dockerfile
+      args:
+        PACKAGE: paritylens-api
+        APP: paritylens_api.main:app
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen("http://localhost:8000/api/v1/health")
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  legacy-shop-api:
+    <<: *python-service
+    build:
+      context: .
+      dockerfile: infra/docker/python-service.Dockerfile
+      args:
+        PACKAGE: legacy-shop-api
+        APP: legacy_shop_api.main:app
+    ports:
+      - "127.0.0.1:8001:8000"
+
+  modern-shop-api:
+    <<: *python-service
+    build:
+      context: .
+      dockerfile: infra/docker/python-service.Dockerfile
+      args:
+        PACKAGE: modern-shop-api
+        APP: modern_shop_api.main:app
+    ports:
+      - "127.0.0.1:8002:8000"
+
+  web:
+    build:
+      context: apps/web
+      dockerfile: ../../infra/docker/web.Dockerfile
+      args:
+        API_INTERNAL_URL: http://api:8000
+    environment:
+      API_INTERNAL_URL: http://api:8000
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
