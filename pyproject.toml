@@ -10,20 +10,21 @@ dependencies = []
 package = false
 
 [tool.uv.workspace]
-members = ["apps/api", "packages/*", "demo/*-shop-api"]
+members = ["apps/api", "packages/engine", "demo/*-shop-api"]
 
 [dependency-groups]
 dev = [
     "httpx2>=2.13", # HTTP client behind FastAPI's TestClient
+    "hypothesis>=6.120",
     "mypy>=1.14",
     "pytest>=8.3",
     "ruff>=0.9",
+    "uvicorn>=0.34", # serves the demo apps on a real port in tests
     # Workspace members, installed editable so tests and mypy can import them.
     "legacy-shop-api",
     "modern-shop-api",
     "paritylens-api",
     "paritylens-engine",
-    "hypothesis>=6.120",
 ]
 
 [tool.uv.sources]
@@ -50,12 +51,15 @@ select = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"**/tests/**" = ["S101"] # assert is how pytest works
+# assert is how pytest works; tests also need made-up secrets to check
+# that they are redacted.
+"**/tests/**" = ["S101", "S105", "S106"]
 
 [tool.mypy]
 strict = true
 python_version = "3.13"
 files = [
+    "conftest.py",
     "apps/api/src",
     "apps/api/tests",
     "packages/engine/src",

@@ -495,11 +495,17 @@ name = "paritylens-engine"
 version = "0.1.0"
 source = { editable = "packages/engine" }
 dependencies = [
+    { name = "anyio" },
+    { name = "httpx2" },
     { name = "pydantic" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "pydantic", specifier = ">=2.10" }]
+requires-dist = [
+    { name = "anyio", specifier = ">=4.10" },
+    { name = "httpx2", specifier = ">=2.13" },
+    { name = "pydantic", specifier = ">=2.10" },
+]
 
 [[package]]
 name = "paritylens-workspace"
@@ -517,6 +523,7 @@ dev = [
     { name = "paritylens-engine" },
     { name = "pytest" },
     { name = "ruff" },
+    { name = "uvicorn" },
 ]
 
 [package.metadata]
@@ -532,6 +539,7 @@ dev = [
     { name = "paritylens-engine", editable = "packages/engine" },
     { name = "pytest", specifier = ">=8.3" },
     { name = "ruff", specifier = ">=0.9" },
+    { name = "uvicorn", specifier = ">=0.34" },
 ]
 
 [[package]]
