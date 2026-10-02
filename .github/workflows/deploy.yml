@@ -1,0 +1,130 @@
+name: Deploy
+
+# Manual only. Nothing is deployed until the AWS resources exist (see
+# infra/terraform/README.md) and these repository variables are set:
+#
+#   AWS_DEPLOY_ROLE_ARN   output "deploy_role_arn" of terraform apply
+#   AWS_REGION            the region deployed into
+#   ECR_REGISTRY          output "ecr_registry" of terraform apply
+#   APP_NAME              only if Terraform's `name` variable was changed
+#
+# This workflow has not been run yet: the infrastructure it deploys to
+# has not been created.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # lets the job request the OIDC token AWS trusts
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false # never abandon a rollout halfway
+
+env:
+  # Terraform's `name`: the cluster, the prefix of the image repositories
+  # and of the task definition families.
+  NAME: ${{ vars.APP_NAME || 'paritylens' }}
+  REGISTRY: ${{ vars.ECR_REGISTRY }}
+  TAG: ${{ github.sha }}
+
+jobs:
+  deploy:
+    name: Build, push and roll out
+    runs-on: ubuntu-latest
+    # The trust policy of the deploy role only accepts the main branch.
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v7
+
+      # No access key is stored anywhere: GitHub signs a short-lived token
+      # for this run and AWS exchanges it for temporary credentials.
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Log in to the image registry
+        run: |
+          aws ecr get-login-password |
+            docker login --username AWS --password-stdin "$REGISTRY"
+
+      - name: Build and push images
+        run: |
+          set -euo pipefail
+          repo="$REGISTRY/$NAME"
+
+          # Image tags cannot be overwritten (the repositories are
+          # immutable), so deploying a commit a second time reuses the
+          # images of the first instead of failing on the push.
+          exists() { docker manifest inspect "$1" > /dev/null 2>&1; }
+
+          python_image() { # name, package, ASGI app
+            if exists "$repo/$1:$TAG"; then echo "$1:$TAG is already pushed"; return; fi
+            docker build --file infra/docker/python-service.Dockerfile \
+              --build-arg "PACKAGE=$2" --build-arg "APP=$3" \
+              --tag "$repo/$1:$TAG" .
+            docker push "$repo/$1:$TAG"
+          }
+          python_image api paritylens-api paritylens_api.main:app
+          python_image legacy-shop-api legacy-shop-api legacy_shop_api.main:app
+          python_image modern-shop-api modern-shop-api modern_shop_api.main:app
+
+          if exists "$repo/web:$TAG"; then
+            echo "web:$TAG is already pushed"
+          else
+            docker build --file infra/docker/web.Dockerfile \
+              --build-arg API_INTERNAL_URL=http://api:8000 \
+              --tag "$repo/web:$TAG" apps/web
+            docker push "$repo/web:$TAG"
+          fi
+
+      - name: Roll out
+        run: |
+          set -euo pipefail
+          repo="$REGISTRY/$NAME"
+
+          roll_out() { # service, image. Prints the ARN of the new revision.
+            # Take the current task definition, change only the image, and
+            # register that as a new revision.
+            aws ecs describe-task-definition --task-definition "$NAME-$1" --query taskDefinition |
+              jq --arg image "$2" '
+                .containerDefinitions[0].image = $image
+                | del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
+                      .compatibilities, .registeredAt, .registeredBy, .deregisteredAt)
+              ' > task-definition.json
+            arn=$(aws ecs register-task-definition \
+              --cli-input-json file://task-definition.json \
+              --query taskDefinition.taskDefinitionArn --output text)
+            aws ecs update-service --cluster "$NAME" --service "$1" \
+              --task-definition "$arn" > /dev/null
+            echo "$arn"
+          }
+
+          # "Stable" is not "succeeded". When new tasks cannot start, the
+          # service rolls back to the previous revision and is stable
+          # again, on the old version. So after waiting, check that what
+          # runs is what was just registered.
+          confirm() { # service, expected task definition ARN
+            aws ecs wait services-stable --cluster "$NAME" --services "$1"
+            running=$(aws ecs describe-services --cluster "$NAME" --services "$1" \
+              --query 'services[0].taskDefinition' --output text)
+            if [ "$running" != "$2" ]; then
+              echo "::error::$1 was rolled back: it runs $running, not $2"
+              exit 1
+            fi
+          }
+
+          # The API first, and alone: its container applies database
+          # migrations on start. Nothing else moves until it is confirmed.
+          api=$(roll_out api "$repo/api:$TAG")
+          confirm api "$api"
+
+          worker=$(roll_out worker "$repo/api:$TAG")
+          web=$(roll_out web "$repo/web:$TAG")
+          legacy=$(roll_out legacy-shop-api "$repo/legacy-shop-api:$TAG")
+          modern=$(roll_out modern-shop-api "$repo/modern-shop-api:$TAG")
+          confirm worker "$worker"
+          confirm web "$web"
+          confirm legacy-shop-api "$legacy"
+          confirm modern-shop-api "$modern"
