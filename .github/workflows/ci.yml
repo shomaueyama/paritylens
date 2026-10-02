@@ -61,6 +61,20 @@ jobs:
           curl --fail --silent --show-error http://localhost:8001/health
           curl --fail --silent --show-error http://localhost:8002/health
           curl --fail --silent --show-error http://localhost:3000/api/v1/health
+      # ParityLens checking the demo: the suite must run, and must find
+      # breaking differences, which is exit status 1.
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - name: Run the demo suite against the running demo APIs
+        run: |
+          status=0
+          uv run paritylens run demo/suite.yaml --output report.json || status=$?
+          if [ "$status" -ne 1 ]; then
+            echo "expected exit status 1 (differences found), got $status"
+            exit 1
+          fi
       - if: failure()
         run: docker compose logs
 

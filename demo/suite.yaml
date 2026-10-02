@@ -1,0 +1,101 @@
+# The demo suite: the same requests to the legacy and the modern shop API.
+#
+#   docker compose up --build -d
+#   uv run paritylens run demo/suite.yaml
+#
+# Every difference listed in demo/README.md shows up in the output.
+
+version: 1
+
+targets:
+  old:
+    base_url: http://localhost:8001
+  new:
+    base_url: http://localhost:8002
+
+rules:
+  # Order lines are identified by SKU; their position in the array is not
+  # part of the contract.
+  unordered:
+    - path: $.items
+      key: sku
+
+cases:
+  - name: Health check
+    steps:
+      - request:
+          method: GET
+          path: /health
+
+  - name: Create an order with one line
+    steps:
+      - request:
+          method: POST
+          path: /orders
+          json:
+            customer_name: John
+            items:
+              - { sku: A-100, quantity: 3 }
+
+  - name: Create an order with two lines
+    steps:
+      - request:
+          method: POST
+          path: /orders
+          json:
+            customer_name: John
+            items:
+              - { sku: B-200, quantity: 1 }
+              - { sku: A-100, quantity: 1 }
+
+  - name: Create an order without a customer name
+    steps:
+      - request:
+          method: POST
+          path: /orders
+          json:
+            items:
+              - { sku: A-100, quantity: 1 }
+
+  - name: Create an order with a quantity of zero
+    steps:
+      - request:
+          method: POST
+          path: /orders
+          json:
+            customer_name: John
+            items:
+              - { sku: A-100, quantity: 0 }
+
+  - name: Fetch an order migrated from the legacy system
+    steps:
+      - request:
+          method: GET
+          path: /orders/ORD-000001
+
+  - name: Fetch an order that does not exist
+    steps:
+      - request:
+          method: GET
+          path: /orders/does-not-exist
+
+  - name: Create an order, cancel it, and fetch it again
+    steps:
+      - id: create
+        request:
+          method: POST
+          path: /orders
+          json:
+            customer_name: John
+            items:
+              - { sku: C-300, quantity: 1 }
+        capture:
+          order_id: $.id
+      - id: cancel
+        request:
+          method: DELETE
+          path: /orders/{{order_id}}
+      - id: fetch
+        request:
+          method: GET
+          path: /orders/{{order_id}}
