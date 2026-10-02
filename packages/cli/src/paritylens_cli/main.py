@@ -15,6 +15,7 @@ from rich.console import Console
 
 from paritylens_cli.loader import SuiteLoadError, load_suite
 from paritylens_cli.render import printable, render_report
+from paritylens_cli.upload import UploadError, upload_report
 
 app = typer.Typer(
     help="Check that a rewritten API still behaves like the one it replaces.",
@@ -31,6 +32,8 @@ class ExitCode(IntEnum):
     BAD_SUITE = 2
     # No such differences, but some cases could not be run at all.
     INCOMPLETE = 3
+    # The run itself was fine, but --upload did not succeed.
+    UPLOAD_FAILED = 4
 
 
 class FailOn(StrEnum):
@@ -72,6 +75,24 @@ def run(
     concurrency: Annotated[
         int, typer.Option(min=1, max=32, help="How many cases to run at once.")
     ] = 4,
+    upload_to: Annotated[
+        str | None,
+        typer.Option(
+            "--upload-to",
+            metavar="PROJECT_ID",
+            help="Store the report in this project on a ParityLens server.",
+        ),
+    ] = None,
+    api_url: Annotated[
+        str,
+        typer.Option(envvar="PARITYLENS_API_URL", help="Where the ParityLens server is."),
+    ] = "http://localhost:3000",
+    api_token: Annotated[
+        str | None,
+        # Read from the environment only. A token given as an argument
+        # would be visible in the process list and the shell history.
+        typer.Option(envvar="PARITYLENS_API_TOKEN", hidden=True),
+    ] = None,
 ) -> None:
     """Send every request in SUITE_FILE to both APIs and report how the answers differ."""
     console = Console()
@@ -96,7 +117,19 @@ def run(
         output.write_text(report.model_dump_json(indent=2), encoding="utf-8")
         console.print(f"\nreport written to {output}")
 
-    raise typer.Exit(exit_code_for(report, fail_on))
+    code = exit_code_for(report, fail_on)
+    if upload_to is not None:
+        try:
+            if not api_token:
+                raise UploadError("set PARITYLENS_API_TOKEN to upload")
+            run_id = upload_report(report, api_url=api_url, project_id=upload_to, token=api_token)
+            console.print(f"uploaded: {api_url.rstrip('/')}/runs/{run_id}", highlight=False)
+        except UploadError as exc:
+            Console(stderr=True).print(printable(str(exc)), style="red", markup=False)
+            # What the comparison found matters more than where it was stored.
+            if code is ExitCode.OK:
+                code = ExitCode.UPLOAD_FAILED
+    raise typer.Exit(code)
 
 
 def exit_code_for(report: RunReport, fail_on: FailOn) -> ExitCode:

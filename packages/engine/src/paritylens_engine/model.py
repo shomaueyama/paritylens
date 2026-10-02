@@ -5,11 +5,15 @@ writes them to a file, the API reads them back and stores them. Everything
 here is immutable.
 """
 
+import re
 from enum import StrEnum
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, JsonValue, field_validator
 
 from paritylens_engine.paths import parse_pattern
+
+# RFC 9110 "token": the characters an HTTP header name may consist of.
+_HEADER_NAME = re.compile(r"[A-Za-z0-9!#$%&'*+.^_`|~-]+")
 
 # Each rule is tested against each difference, so their number is bounded.
 MAX_RULES_PER_KIND = 200
@@ -155,7 +159,10 @@ class RuleSet(_Frozen):
 
     @field_validator("compare_headers")
     @classmethod
-    def _lowercase_headers(cls, names: tuple[str, ...]) -> tuple[str, ...]:
+    def _header_names(cls, names: tuple[str, ...]) -> tuple[str, ...]:
+        for name in names:
+            if not _HEADER_NAME.fullmatch(name):
+                raise ValueError("compare_headers must be HTTP header names")
         return tuple(name.lower() for name in names)
 
 

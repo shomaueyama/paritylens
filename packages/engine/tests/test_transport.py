@@ -9,9 +9,8 @@ import httpcore2
 import httpx2
 import pytest
 from paritylens_engine.egress import EgressDeniedError, EgressMode, EgressPolicy, IPAddress
+from paritylens_engine.testing import Serve
 from paritylens_engine.transport import GuardedBackend, GuardedTransport, system_resolver
-
-from conftest import Serve
 
 PUBLIC_ONLY = EgressPolicy(mode=EgressMode.PUBLIC_ONLY)
 PERMISSIVE = EgressPolicy(mode=EgressMode.PERMISSIVE)

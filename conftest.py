@@ -3,14 +3,13 @@
 import socket
 import threading
 import time
-from collections.abc import Callable, Iterator
-from contextlib import AbstractContextManager, contextmanager
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 
 import pytest
 import uvicorn
-
-type Serve = Callable[[Any], AbstractContextManager[str]]
+from paritylens_engine.testing import Serve
 
 
 @contextmanager
