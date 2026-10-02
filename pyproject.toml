@@ -23,6 +23,7 @@ dev = [
     "modern-shop-api",
     "paritylens-api",
     "paritylens-engine",
+    "hypothesis>=6.120",
 ]
 
 [tool.uv.sources]
