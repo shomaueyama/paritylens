@@ -59,9 +59,22 @@ resource "aws_iam_role" "task" {
 
 data "aws_caller_identity" "current" {}
 
+# An account can hold only one provider per URL. If another project in
+# this account already created it, pass its ARN instead of creating a
+# second, which fails with EntityAlreadyExists.
 resource "aws_iam_openid_connect_provider" "github" {
+  count = var.github_oidc_provider_arn == "" ? 1 : 0
+
   url            = "https://token.actions.githubusercontent.com"
   client_id_list = ["sts.amazonaws.com"]
+}
+
+locals {
+  github_oidc_provider_arn = (
+    var.github_oidc_provider_arn != ""
+    ? var.github_oidc_provider_arn
+    : aws_iam_openid_connect_provider.github[0].arn
+  )
 }
 
 data "aws_iam_policy_document" "github_assume" {
@@ -69,7 +82,7 @@ data "aws_iam_policy_document" "github_assume" {
     actions = ["sts:AssumeRoleWithWebIdentity"]
     principals {
       type        = "Federated"
-      identifiers = [aws_iam_openid_connect_provider.github.arn]
+      identifiers = [local.github_oidc_provider_arn]
     }
     condition {
       test     = "StringEquals"

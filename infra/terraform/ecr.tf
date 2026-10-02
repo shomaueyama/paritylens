@@ -10,6 +10,7 @@ resource "aws_ecr_repository" "app" {
 
   name                 = "${var.name}/${each.key}"
   image_tag_mutability = "IMMUTABLE" # a tag, once pushed, always means the same image
+  force_delete         = var.allow_destroy
 
   image_scanning_configuration {
     scan_on_push = true

@@ -70,7 +70,12 @@ resource "aws_ecs_task_definition" "api" {
     essential = true
     # Apply migrations, then serve. With one task this is safe; with more
     # than one, run migrations as a separate one-off task before rolling out.
-    command                = ["sh", "-c", "python -m paritylens_api.migrate && exec uvicorn paritylens_api.main:app --host 0.0.0.0 --port 8000"]
+    #
+    # --timeout-keep-alive: the load balancer keeps idle connections for 60
+    # seconds and reuses them. uvicorn closes them after 5 by default, and
+    # a request sent down a connection the server just closed is a 502.
+    # The server must be the more patient of the two.
+    command                = ["sh", "-c", "python -m paritylens_api.migrate && exec uvicorn paritylens_api.main:app --host 0.0.0.0 --port 8000 --timeout-keep-alive 75"]
     portMappings           = [{ name = "api", containerPort = 8000, protocol = "tcp" }]
     environment            = local.backend_environment
     secrets                = local.backend_secrets
@@ -128,7 +133,12 @@ resource "aws_ecs_task_definition" "web" {
     image        = local.image["web"]
     essential    = true
     portMappings = [{ name = "web", containerPort = 3000, protocol = "tcp" }]
-    environment  = [{ name = "API_INTERNAL_URL", value = "http://api:8000" }]
+    environment = [
+      { name = "API_INTERNAL_URL", value = "http://api:8000" },
+      # Longer than the load balancer's 60 second idle timeout; see the
+      # API's --timeout-keep-alive above.
+      { name = "KEEP_ALIVE_TIMEOUT", value = "75000" },
+    ]
     logConfiguration = {
       logDriver = "awslogs"
       options = {
@@ -174,7 +184,7 @@ resource "aws_ecs_service" "api" {
   name            = "api"
   cluster         = aws_ecs_cluster.main.id
   task_definition = aws_ecs_task_definition.api.arn
-  desired_count   = 1
+  desired_count   = var.desired_count
   launch_type     = "FARGATE"
 
   # New versions are rolled out by the deploy workflow, which registers a
@@ -215,14 +225,16 @@ resource "aws_ecs_service" "api" {
     rollback = true
   }
 
-  depends_on = [aws_lb_listener.https]
+  # The rule is what attaches the API's target group to the load balancer;
+  # a service cannot register with a target group that has none.
+  depends_on = [aws_lb_listener_rule.api]
 }
 
 resource "aws_ecs_service" "worker" {
   name            = "worker"
   cluster         = aws_ecs_cluster.main.id
   task_definition = aws_ecs_task_definition.worker.arn
-  desired_count   = 1
+  desired_count   = var.desired_count
   launch_type     = "FARGATE"
 
   # New versions are rolled out by the deploy workflow, which registers a
@@ -257,7 +269,7 @@ resource "aws_ecs_service" "web" {
   name            = "web"
   cluster         = aws_ecs_cluster.main.id
   task_definition = aws_ecs_task_definition.web.arn
-  desired_count   = 1
+  desired_count   = var.desired_count
   launch_type     = "FARGATE"
 
   # New versions are rolled out by the deploy workflow, which registers a
@@ -298,7 +310,7 @@ resource "aws_ecs_service" "demo" {
   name            = each.key
   cluster         = aws_ecs_cluster.main.id
   task_definition = aws_ecs_task_definition.demo[each.key].arn
-  desired_count   = 1
+  desired_count   = var.desired_count
   launch_type     = "FARGATE"
 
   # New versions are rolled out by the deploy workflow, which registers a

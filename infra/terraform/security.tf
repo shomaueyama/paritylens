@@ -174,11 +174,16 @@ resource "aws_vpc_security_group_egress_rule" "worker_to_database" {
   to_port                      = 5432
 }
 
-# The second layer of the SSRF defence. The application's EgressPolicy
-# already limits the worker to the demo APIs; this makes the network agree.
-# Port 443 above is still open to the internet (it has to be), so the
-# metadata endpoint and anything else on other ports inside the VPC is
-# unreachable from the worker even if the application check were bypassed.
+# A second layer under the application's EgressPolicy, and a partial one.
+# Inside the VPC the worker can reach the demo APIs and the database and
+# nothing else, whatever the application does. Two things it does not cover:
+#
+# - Port 443 is open to the internet (the model provider, ECR and Secrets
+#   Manager are there), so the network does not confine HTTPS requests.
+# - Security groups do not filter the link-local metadata endpoints
+#   (169.254.169.254, 169.254.170.2). Those are refused by the engine,
+#   which never connects to link-local addresses, and would yield nothing
+#   useful: the worker's task role has no permissions.
 resource "aws_vpc_security_group_egress_rule" "worker_to_demo" {
   security_group_id            = aws_security_group.worker.id
   referenced_security_group_id = aws_security_group.demo.id

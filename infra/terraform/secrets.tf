@@ -12,7 +12,9 @@ resource "random_bytes" "master_key" {
 locals {
   secrets = {
     database_url = format(
-      "postgresql+asyncpg://%s:%s@%s:%d/%s",
+      # ssl=require: refuse to talk to the database without TLS, instead of
+      # the driver's default of trying TLS and falling back.
+      "postgresql+asyncpg://%s:%s@%s:%d/%s?ssl=require",
       aws_db_instance.main.username,
       random_password.database.result,
       aws_db_instance.main.address,

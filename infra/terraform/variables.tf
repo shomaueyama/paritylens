@@ -49,6 +49,30 @@ variable "anthropic_api_key" {
   sensitive   = true
 }
 
+variable "github_oidc_provider_arn" {
+  description = "ARN of the account's existing IAM OIDC provider for token.actions.githubusercontent.com. An account can have only one; leave empty to create it here."
+  type        = string
+  default     = ""
+}
+
+variable "desired_count" {
+  description = "Tasks per service. Set to 0 to stop everything without destroying it."
+  type        = number
+  default     = 1
+
+  validation {
+    # Migrations run when the API task starts; two starting at once would race.
+    condition     = contains([0, 1], var.desired_count)
+    error_message = "This configuration is written for one task per service."
+  }
+}
+
+variable "allow_destroy" {
+  description = "Lets terraform destroy remove what holds data: the database (deletion protection off) and image repositories that still contain images."
+  type        = bool
+  default     = false
+}
+
 variable "db_instance_class" {
   description = "RDS instance class."
   type        = string

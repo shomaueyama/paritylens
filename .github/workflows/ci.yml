@@ -136,7 +136,7 @@ jobs:
       - name: terraform fmt and validate
         working-directory: infra/terraform
         run: |
-          tf() { docker run --rm --volume "$PWD:/tf" --workdir /tf hashicorp/terraform:1.9 "$@"; }
+          tf() { docker run --rm --volume "$PWD:/tf" --workdir /tf hashicorp/terraform:1.10 "$@"; }
           tf fmt -check -recursive
           tf init -backend=false -input=false
           tf validate
