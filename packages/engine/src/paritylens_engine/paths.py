@@ -13,6 +13,9 @@ the pattern against a document.
 import re
 from dataclasses import dataclass
 from functools import cache
+from typing import Any
+
+from paritylens_engine.jsonvalue import label
 
 __all__ = [
     "KeyMatch",
@@ -141,12 +144,48 @@ class Pattern:
         """True when the pattern names exactly this path."""
         return _match(self.segments, path)
 
+    @property
+    def is_concrete(self) -> bool:
+        """True when the pattern names one place, with no wildcards."""
+        return all(isinstance(segment, _Key | _Index | KeyMatch) for segment in self.segments)
+
+    def find(self, document: Any) -> tuple[bool, Any]:
+        """Look up the one place a concrete pattern names.
+
+        Returns (found, value). The flag is separate because null is a
+        value a document can hold.
+        """
+        current = document
+        for segment in self.segments:
+            match segment:
+                case _Key(name) if isinstance(current, dict) and name in current:
+                    current = current[name]
+                case _Index(index) if isinstance(current, list) and index < len(current):
+                    current = current[index]
+                case KeyMatch(key, value) if isinstance(current, list):
+                    for item in current:
+                        if isinstance(item, dict) and _names(item.get(key), value):
+                            current = item
+                            break
+                    else:
+                        return False, None
+                case _:
+                    return False, None
+        return True, current
+
     def covers(self, path: Path) -> bool:
         """True when the pattern names this path or anything it is inside of.
 
         Ignoring $.meta has to ignore $.meta.trace_id as well.
         """
         return any(self.matches(path[:length]) for length in range(len(path) + 1))
+
+
+def _names(candidate: Any, wanted: str) -> bool:
+    """Whether a field's value is the one a [key=value] segment asks for."""
+    if candidate is None or isinstance(candidate, list | dict):
+        return False
+    return label(candidate) == wanted
 
 
 def _segment_matches(pattern: _PatternSegment, segment: Segment) -> bool:

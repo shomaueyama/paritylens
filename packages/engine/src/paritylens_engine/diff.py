@@ -7,9 +7,8 @@ what differs and where; severity.py decides how serious each one is.
 from collections import Counter
 from collections.abc import Hashable
 from dataclasses import dataclass
-from decimal import Decimal
 
-from paritylens_engine.jsonvalue import Json, json_type
+from paritylens_engine.jsonvalue import Json, json_type, label
 from paritylens_engine.model import DiffKind, Note, ResponseSnapshot
 from paritylens_engine.normalize import EmptyBody, JsonBody, TextBody, media_type, read_body
 from paritylens_engine.paths import KeyMatch, Path, render
@@ -179,34 +178,23 @@ def _index_by(items: list[Json], key: str) -> dict[str, Json] | None:
         value = item[key]
         if isinstance(value, list | dict) or value is None:
             return None
-        label = _label(value)
-        if label in indexed:
+        name = label(value)
+        if name in indexed:
             return None
-        indexed[label] = item
+        indexed[name] = item
     return indexed
-
-
-def _label(value: bool | int | Decimal | str) -> str:
-    """The text a key value is known by. Equal numbers get the same label,
-    however they were written: 1.50 and 1.5 name the same element."""
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, Decimal) and abs(value.adjusted()) < 40:
-        digits = format(value, "f")
-        return digits.rstrip("0").rstrip(".") if "." in digits else digits
-    return str(value)
 
 
 def _diff_keyed(
     old: dict[str, Json], new: dict[str, Json], key: str, path: Path, rules: CompiledRules
 ) -> list[RawDifference]:
     differences: list[RawDifference] = []
-    for label, old_item in old.items():
-        if label in new:
-            child = (*path, KeyMatch(key, label))
-            differences.extend(_diff_values(old_item, new[label], child, rules))
-    only_old = [item for label, item in old.items() if label not in new]
-    only_new = [item for label, item in new.items() if label not in old]
+    for name, old_item in old.items():
+        if name in new:
+            child = (*path, KeyMatch(key, name))
+            differences.extend(_diff_values(old_item, new[name], child, rules))
+    only_old = [item for name, item in old.items() if name not in new]
+    only_new = [item for name, item in new.items() if name not in old]
     if only_old or only_new:
         differences.append(_unmatched(path, only_old, only_new))
     return differences

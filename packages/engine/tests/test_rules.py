@@ -55,3 +55,8 @@ def test_an_empty_key_is_rejected() -> None:
 def test_the_clock_tolerance_has_an_upper_bound() -> None:
     with pytest.raises(ValidationError):
         RuleSet(clock_tolerance_seconds=10**14)
+
+
+def test_the_number_of_rules_is_bounded() -> None:
+    with pytest.raises(ValidationError):
+        RuleSet(ignore=tuple(f"$.f{n}" for n in range(201)))

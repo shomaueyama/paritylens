@@ -11,6 +11,11 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, JsonValue, fie
 
 from paritylens_engine.paths import parse_pattern
 
+# Each rule is tested against each difference, so their number is bounded.
+MAX_RULES_PER_KIND = 200
+# A step keeps at most this many differences, the most severe first.
+MAX_DIFFERENCES_PER_STEP = 1000
+
 
 class _Frozen(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -77,6 +82,10 @@ class Note(StrEnum):
     BODY_NOT_COMPARED_STATUS_CLASS = "body_not_compared_status_class"
     BODY_NOT_COMPARED_TRUNCATED = "body_not_compared_truncated"
     BASELINE_UNSTABLE = "baseline_unstable"
+    # The second request to the old API failed, so noise could not be detected.
+    BASELINE_UNAVAILABLE = "baseline_unavailable"
+    # There were more differences than a report keeps; the least severe were dropped.
+    DIFFERENCES_TRUNCATED = "differences_truncated"
 
 
 class Verdict(StrEnum):
@@ -118,10 +127,10 @@ class UnorderedRule(_Frozen):
 class RuleSet(_Frozen):
     """Everything a user can configure about how responses are compared."""
 
-    ignore: tuple[str, ...] = ()
-    unordered: tuple[UnorderedRule, ...] = ()
-    critical: tuple[str, ...] = ()
-    compare_headers: tuple[str, ...] = ()
+    ignore: tuple[str, ...] = Field(default=(), max_length=MAX_RULES_PER_KIND)
+    unordered: tuple[UnorderedRule, ...] = Field(default=(), max_length=MAX_RULES_PER_KIND)
+    critical: tuple[str, ...] = Field(default=(), max_length=MAX_RULES_PER_KIND)
+    compare_headers: tuple[str, ...] = Field(default=(), max_length=MAX_RULES_PER_KIND)
     # Treat fields named like money (total, tax_amount, ...) as critical.
     critical_field_names: bool = True
     # How far a timestamp may be from the moment of the response and still

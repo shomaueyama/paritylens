@@ -99,6 +99,20 @@ def json_type(value: Json) -> str:
     return "object"
 
 
+def label(value: bool | int | Decimal | str) -> str:
+    """The text a scalar is known by when it identifies something.
+
+    Equal numbers get the same label however they were written: 1.50 and
+    1.5 name the same element.
+    """
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, Decimal) and abs(value.adjusted()) < 40:
+        digits = format(value, "f")
+        return digits.rstrip("0").rstrip(".") if "." in digits else digits
+    return str(value)
+
+
 def to_plain(value: Json) -> JsonValue:
     """Convert to a value that serialises as ordinary JSON (no Decimal)."""
     if isinstance(value, Decimal):
