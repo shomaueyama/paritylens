@@ -176,3 +176,23 @@ def test_a_critical_rule_outranks_the_baseline() -> None:
     ).differences
 
     assert (difference.severity, difference.reason) == (Severity.CRITICAL, Reason.CRITICAL_RULE)
+
+
+def test_a_step_keeps_a_bounded_number_of_differences_the_most_severe_first() -> None:
+    from paritylens_engine.model import MAX_DIFFERENCES_PER_STEP
+
+    count = MAX_DIFFERENCES_PER_STEP + 500
+    old = {f"field_{n}": n for n in range(count)} | {"total": 100, "gone": 1}
+    new = {f"field_{n}": n + 1 for n in range(count)} | {"total": 101}
+
+    comparison = compare_step(json_response(old), json_response(new))
+
+    assert len(comparison.differences) == MAX_DIFFERENCES_PER_STEP
+    assert Note.DIFFERENCES_TRUNCATED in comparison.notes
+    # What was dropped was the least severe: the verdict is unchanged.
+    assert comparison.max_severity is Severity.CRITICAL
+    kept = {d.path for d in comparison.differences}
+    assert {"$.total", "$.gone"} <= kept
+    # And what is kept is still in document order.
+    paths = [d.path for d in comparison.differences]
+    assert paths.index("$.field_0") < paths.index("$.field_1") < paths.index("$.total")
